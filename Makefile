@@ -52,7 +52,7 @@ dataset: ## Regenerate the synthetic-v1 benchmark dataset
 	$(PYTHON) benchmark/generate_synthetic.py
 
 leaderboard: ## Regenerate benchmark/LEADERBOARD.md from committed results
-	$(CLI) bench report benchmark/results/*.json > benchmark/LEADERBOARD.md
+	$(CLI) bench report --by-dataset --intro benchmark/LEADERBOARD.intro.md benchmark/results/*.json > benchmark/LEADERBOARD.md
 
 clean: ## Remove Rust build artifacts
 	$(CARGO) clean

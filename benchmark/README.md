@@ -64,7 +64,8 @@ cargo build --release -p puffinparse-cli
     --models reducto/standard reducto/r-1 extend/parse_performance extend/parse_light \
              llamaparse/fast llamaparse/cost_effective llamaparse/agentic \
     --concurrency 4 --save-outputs benchmark/runs/outputs
-./target/release/puffinparse bench report benchmark/results/*.json > benchmark/LEADERBOARD.md
+./target/release/puffinparse bench report --by-dataset --intro benchmark/LEADERBOARD.intro.md \
+    benchmark/results/*.json > benchmark/LEADERBOARD.md   # or: make leaderboard
 ```
 
 `--save-outputs` writes each model's markdown per document so mistakes can be inspected. Committed

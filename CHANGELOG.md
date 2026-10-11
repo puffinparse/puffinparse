@@ -9,6 +9,14 @@ Python package `puffinparse` share a single version. Entries before the rename s
 
 ## [Unreleased]
 
+### Added
+
+- `puffinparse bench report --by-dataset [--intro FILE]` renders the whole leaderboard page: one
+  section per dataset, the newest run's dataset first as the headline. `make leaderboard` uses it
+  (the hand-written introduction lives in `benchmark/LEADERBOARD.intro.md`), and a test fails when
+  `benchmark/LEADERBOARD.md` is out of date with the committed results. `make leaderboard` used to
+  overwrite the page with one merged table.
+
 ## [0.1.6] - 2026-10-08
 
 ### Changed

@@ -1,7 +1,8 @@
 # PuffinParse Leaderboard
 
-Generated from the result files in `benchmark/results/` with `puffinparse bench report` (one section
-per dataset; each section is that command's output for one result file). Higher **Overall** is
+Generated from the result files in `benchmark/results/` by `make leaderboard`
+(`puffinparse bench report --by-dataset --intro benchmark/LEADERBOARD.intro.md`): this introduction
+is hand-written in `LEADERBOARD.intro.md`; every section below is generated. Higher **Overall** is
 better (100 = character-exact after normalisation, or every rule passing). Latency is measured
 from the client through the public API, including upload and polling, with provider result caches
 disabled. Prices are public pay-as-you-go list prices. Methodology and caveats:
