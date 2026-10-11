@@ -20,7 +20,8 @@ path = "src/main.rs"
 [dependencies]
 puffinparse-core = { workspace = true }
 puffinparse-server = { path = "../puffinparse-server", version = "0.1.6" }
-tokio = { workspace = true }
+# `io-std` + `io-util`: `puffinparse mcp` speaks JSON-RPC over stdin / stdout.
+tokio = { workspace = true, features = ["io-std", "io-util"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
@@ -32,3 +33,8 @@ indicatif = { workspace = true }
 futures = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2 = "0.11"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+# Loopback mock of a provider API for the MCP tests (already built for puffinparse-server).
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }

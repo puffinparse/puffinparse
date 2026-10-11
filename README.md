@@ -34,6 +34,7 @@ Two things make switching real rather than aspirational. **Modes**: every call n
 | **Gateway** | `puffinparse serve`: one HTTP endpoint with aliases, fallbacks, virtual keys, budgets, rate limits, JSON logs and Prometheus metrics ([`docs/SERVER.md`](https://github.com/ajinkyashejul/puffinparse/blob/main/docs/SERVER.md)) |
 | **Long documents** | `submit` / `retrieve` jobs and provider webhooks instead of a blocking call ([below](#long-documents-jobs-and-webhooks)) |
 | **CLI** | `puffinparse parse`, `puffinparse ocr`, `puffinparse extract`, `puffinparse providers`, `puffinparse bench` |
+| **MCP server** | `puffinparse mcp`: a local stdio MCP server for Claude Code, Cursor and Codex with `parse`, `ocr`, `extract`, `list_models` and `compare` tools, using your own provider keys ([setup](https://puffinparse.com/docs/agents/)) |
 | **Reliability** | Retries with jittered backoff, whole-call deadlines, `Router` with ordered fallbacks / round-robin |
 | **Compatibility** | `output_format` renders any provider's result in Reducto's, Extend's or LlamaParse's own JSON, so an existing integration keeps its parser ([`docs/COMPAT.md`](https://github.com/ajinkyashejul/puffinparse/blob/main/docs/COMPAT.md)) |
 | **Cost** | Embedded, overridable price table → `cost_usd` on every response |
@@ -383,7 +384,6 @@ page per provider.
 | `opendocrouter/rednote-hilab/dots.mocr` | parse, ocr | $0.00397 · $0.00397 · — | dots.mocr (open model hosted by the router) |
 | `opendocrouter/paddlepaddle/paddleocr-vl-1.6` | parse, ocr | $0.002111 · $0.002111 · — | PaddleOCR-VL-1.6 (open model hosted by the router) |
 
-**Self-hosted engines** · no key · $0/page — out-of-process: a local binary or a server you run. Tesseract and Docling are verified locally; PaddleOCR is docs-only.
 **Self-hosted engines** · no key · $0/page — out-of-process: a local binary or a server you run. Tesseract and Docling are verified locally; PaddleOCR and vLLM are docs-only.
 
 | Model | Modes | List price / page (parse · ocr · extract) | Notes |
@@ -486,6 +486,19 @@ puffinparse extract invoice.pdf -s '{"type":"object"}'            # inline schem
 puffinparse extract invoice.pdf -s schema.json --output-format extend   # Extend's extract_run shape
 puffinparse providers --json | jq '.output_formats'               # the vendor shapes this build renders
 ```
+
+### MCP server for coding agents
+
+`puffinparse mcp` runs a local [Model Context Protocol](https://modelcontextprotocol.io) server on
+stdio, so an agent can parse, OCR, extract and compare models on a document directly:
+
+```bash
+claude mcp add puffinparse -- puffinparse mcp                     # Claude Code
+puffinparse mcp --models reducto,llamaparse --root ~/docs         # optional allow-list and file root
+```
+
+Keys come from the server's environment and are never returned; a document goes only to the
+provider of the model the agent calls. Cursor and Codex setup: [agents page](https://puffinparse.com/docs/agents/).
 
 ### Gateway server
 

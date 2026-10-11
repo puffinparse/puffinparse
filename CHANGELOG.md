@@ -106,6 +106,14 @@ Python package `puffinparse` share a single version. Entries before the rename s
   licence file have theirs under `licenses/extra/`, fetched from the crate's repository at the
   published commit; r-efi's notices come from its `AUTHORS` file. `scripts/check_release_licenses.py`
   fails a release build whose artifact lacks them.
+- `puffinparse mcp`: a local Model Context Protocol server on stdio for coding agents (Claude Code,
+  Cursor, Codex), with `parse`, `ocr`, `extract`, `list_models` and `compare` tools. `compare` runs
+  one document through up to eight models concurrently and reports each one's latency, cost,
+  output length and an excerpt. Keys come from the server's environment and are never returned.
+  Provider failures are tool errors that keep the error kind and the provider's message. Long
+  output is truncated with a note. Optional `--models` allow-list and `--root` directory
+  confinement. Speaks MCP `2026-07-28` and the `initialize`-based revisions back to `2024-11-05`.
+  Setup snippets are on the agents page.
 
 ## [0.1.6] - 2026-10-08
 

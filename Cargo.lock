@@ -1398,6 +1398,7 @@ name = "puffinparse-cli"
 version = "0.1.6"
 dependencies = [
  "anyhow",
+ "axum",
  "chrono",
  "clap",
  "comfy-table",

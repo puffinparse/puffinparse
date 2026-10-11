@@ -1,6 +1,7 @@
 //! `puffinparse` command-line interface.
 
 mod bench;
+mod mcp;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -45,6 +46,29 @@ enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Run a Model Context Protocol server on stdio for coding agents (Claude Code, Cursor, Codex).
+    ///
+    /// Tools: parse, ocr, extract, list_models, compare. Provider keys are read from this process's
+    /// environment and never returned. Documents go only to the providers of the models called.
+    Mcp(McpArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct McpArgs {
+    /// Only allow these models: "provider/model", "provider/*" or a bare provider name.
+    /// Repeatable or comma-separated. Default: every model.
+    #[arg(long = "models", value_name = "MODEL", value_delimiter = ',')]
+    models: Vec<String>,
+    /// Whole-call timeout per provider call, in seconds.
+    #[arg(long, default_value_t = 300.0)]
+    timeout: f64,
+    /// Retries on transient errors (429 / 5xx / network).
+    #[arg(long, default_value_t = 2)]
+    max_retries: u32,
+    /// Only read local files inside this directory (paths are canonicalized, symlinks followed).
+    /// Default: any file this process can read. URLs are not affected.
+    #[arg(long, value_name = "DIR")]
+    root: Option<std::path::PathBuf>,
 }
 
 /// Options shared by every mode.
@@ -203,6 +227,19 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Providers { mode, json } => providers(mode.as_deref(), json),
         Command::Bench(cmd) => bench::run(cmd).await,
         Command::Serve { config, host, port } => serve(config, host, port).await,
+        Command::Mcp(args) => {
+            let allow = mcp::AllowList::new(&args.models)?;
+            let root = match args.root {
+                Some(dir) => {
+                    let canonical = std::fs::canonicalize(&dir)
+                        .with_context(|| format!("--root {}: cannot resolve", dir.display()))?;
+                    anyhow::ensure!(canonical.is_dir(), "--root {} is not a directory", dir.display());
+                    Some(canonical)
+                }
+                None => None,
+            };
+            mcp::run_stdio(mcp::Config::new(allow, args.timeout, args.max_retries, root)).await
+        }
     }
 }
 

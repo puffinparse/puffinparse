@@ -1,7 +1,7 @@
 # CLI
 
 The `puffinparse` binary wraps the same Rust core as the SDK. One subcommand per mode — `parse`, `ocr`,
-`extract` — plus `providers`, `bench` and `serve` (the [gateway](../server/)).
+`extract` — plus `providers`, `bench`, `serve` (the [gateway](../server/)) and `mcp` (an MCP server for coding agents).
 
 ```bash
 cargo build --release -p puffinparse-cli    # ./target/release/puffinparse
@@ -161,6 +161,37 @@ Handy for scripting, or for an agent picking a model.
 puffinparse providers --json | jq -r '.providers[].models[] | select(.per_page_usd.parse < 0.005) | .model'
 puffinparse providers --mode ocr --json | jq -r '.providers[].models[].model'
 puffinparse providers --json | jq -r '.output_formats[]'
+```
+
+## `puffinparse mcp`
+
+Run a local [Model Context Protocol](https://modelcontextprotocol.io) server on stdin / stdout for
+coding agents such as Claude Code, Cursor and Codex. The client starts the process itself; client
+setup is on the [agents page](/agents/#mcp-server).
+
+```bash
+puffinparse mcp [OPTIONS]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--models <MODEL>` | every model | Allow-list: `provider/model`, `provider/*` or a bare provider name. Repeatable or comma-separated. An unknown name fails at startup. |
+| `--root <DIR>` | off | Only read local files inside this directory. Paths and `file://` URLs are canonicalized with symlinks followed; anything outside is refused as a tool error. URLs are unaffected. |
+| `--timeout <SECONDS>` | `300` | Whole-call deadline for each provider call. |
+| `--max-retries <N>` | `2` | Retries on transient errors. |
+
+Tools: `parse`, `ocr`, `extract`, `list_models` and `compare`, which runs one document through up to
+eight models concurrently and reports each one's latency, cost, output length and an excerpt.
+Provider keys come from the environment, exactly as for the other subcommands. No tool accepts a key
+and no result contains one. Documents go only to the provider of the model being called.
+
+The server speaks MCP revision `2026-07-28` (stateless requests, `server/discover`) and the
+handshake revisions `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05` (`initialize`) that
+current clients use. stdout carries only protocol messages; `PUFFINPARSE_LOG` logging goes to
+stderr. The server exits when stdin closes.
+
+```bash
+puffinparse mcp --models reducto,llamaparse,tesseract --root ~/Documents/invoices
 ```
 
 ## `puffinparse bench`
