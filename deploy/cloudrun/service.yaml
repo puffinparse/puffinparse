@@ -3,6 +3,13 @@
 # after replacing PROJECT, REGION and the image tag, creating the secrets below in Secret Manager
 # (the config file itself is the `puffinparse-playground-config` secret, from
 # deploy/cloudrun/puffinparse.toml), and granting the service account secretAccessor on them.
+# Then let browsers call it. `ingress: all` only opens the network path; Cloud Run still checks
+# the caller's IAM permission, and a new service grants nobody, so every request gets 403:
+#   gcloud run services add-iam-policy-binding puffinparse-playground --region REGION \
+#     --member=allUsers --role=roles/run.invoker
+# (An organisation policy restricting allUsers blocks this; then use
+# `gcloud run services update puffinparse-playground --region REGION --no-invoker-iam-check`.)
+# The gateway does its own authentication (Supabase tokens, provider keys, Turnstile).
 # Map the custom domain (api.puffinparse.com, an OWNER DECISION) with a domain mapping or a load
 # balancer; the website's CSP (vercel.json) and PLAYGROUND_API_ORIGIN (website/build.py) name it.
 apiVersion: serving.knative.dev/v1
@@ -25,8 +32,9 @@ spec:
       timeoutSeconds: 300
       containers:
         # Cloud Run pulls from Artifact Registry: mirror ghcr.io/ajinkyashejul/puffinparse through a
-        # remote repository, and pin a released version (never `latest`).
-        - image: REGION-docker.pkg.dev/PROJECT/ghcr/ajinkyashejul/puffinparse:0.1.6
+        # remote repository, and pin a released version (never `latest`). 0.2.0 is the first
+        # release with the [playground] section; earlier images reject this config.
+        - image: REGION-docker.pkg.dev/PROJECT/ghcr/ajinkyashejul/puffinparse:0.2.0
           args: ["serve", "--config", "/etc/puffinparse/puffinparse.toml"]
           ports:
             - containerPort: 8080
