@@ -60,6 +60,8 @@ pub(crate) struct Playground {
     http: reqwest::Client,
     /// HMAC key for own-key job owners. Random per process, never stored.
     owner_secret: [u8; 32],
+    /// PDF page scans running at once (each holds up to 16 MiB of inflated data).
+    scans: tokio::sync::Semaphore,
 }
 
 impl std::fmt::Debug for Playground {
@@ -125,7 +127,8 @@ impl Playground {
         let mut owner_secret = [0u8; 32];
         owner_secret[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
         owner_secret[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-        let pg = Self { cfg: cfg.clone(), models, auth, turnstile_secret, quota, http, owner_secret };
+        let scans = tokio::sync::Semaphore::new(pages::MAX_CONCURRENT_SCANS);
+        let pg = Self { cfg: cfg.clone(), models, auth, turnstile_secret, quota, http, owner_secret, scans };
         if !pg.free_configured() {
             eprintln!(
                 "playground: the free tier is off (it needs playground.supabase, playground.turnstile_secret and \
@@ -638,7 +641,12 @@ async fn handle_run(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<Ser
         )
     })?;
     let page_count = match kind {
-        Kind::Pdf => pages::pdf_pages(&up.data),
+        Kind::Pdf => {
+            // CPU-bound and allocating: a few at a time, off the async workers.
+            let _permit = pg.scans.acquire().await.map_err(|_| scan_failed())?;
+            let data = up.data.clone();
+            tokio::task::spawn_blocking(move || pages::pdf_pages(&data)).await.map_err(|_| scan_failed())?
+        }
         Kind::Png | Kind::Jpeg => Some(1),
     };
     if let Some(n) = page_count.filter(|n| *n > pg.cfg.max_pages) {
@@ -844,6 +852,10 @@ impl Playground {
             }
         });
     }
+}
+
+fn scan_failed() -> ApiError {
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", "the document could not be checked; try again")
 }
 
 #[cfg(test)]

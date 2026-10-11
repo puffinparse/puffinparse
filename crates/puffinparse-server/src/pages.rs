@@ -40,8 +40,11 @@ pub fn sniff(data: &[u8]) -> Option<Kind> {
     }
 }
 
-/// Total bytes inflated across all streams of one document.
-const MAX_INFLATED: u64 = 64 * 1024 * 1024;
+/// Total bytes inflated across all object streams of one document. Page-tree objects are small;
+/// with at most [`MAX_CONCURRENT_SCANS`] scans at once this bounds the memory they use.
+const MAX_INFLATED: u64 = 16 * 1024 * 1024;
+/// PDF scans running at once in the gateway (each on a blocking thread).
+pub const MAX_CONCURRENT_SCANS: usize = 4;
 /// How far back from a keyword to look for the `<<` that opens its dictionary. Bounds the work
 /// per keyword, so a file full of streams stays linear.
 const DICT_REACH: usize = 4096;
@@ -57,7 +60,7 @@ pub fn pdf_pages(data: &[u8]) -> Option<u32> {
     let mut objects = count_page_objects(data);
     let mut tree = max_count(data);
     let mut budget = MAX_INFLATED;
-    for stream in flate_streams(data) {
+    for stream in object_streams(data) {
         if budget == 0 {
             break;
         }
@@ -129,8 +132,10 @@ fn find_all<'a>(hay: &'a [u8], needle: &'a [u8]) -> impl Iterator<Item = usize> 
     hay.windows(needle.len()).enumerate().filter(move |(_, w)| *w == needle).map(|(i, _)| i)
 }
 
-/// The raw bytes of every stream whose dictionary names `/FlateDecode` (`/Fl` abbreviation too).
-fn flate_streams(data: &[u8]) -> Vec<&[u8]> {
+/// The raw bytes of every compressed object stream: a stream whose dictionary names `/ObjStm`
+/// and `/FlateDecode` (`/Fl` abbreviation too). Page objects live either in plain objects or in
+/// object streams, so content and image streams (most of a file's bytes) are never inflated.
+fn object_streams(data: &[u8]) -> Vec<&[u8]> {
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(p) = data[from..].windows(6).position(|w| w == b"stream") {
@@ -141,6 +146,9 @@ fn flate_streams(data: &[u8]) -> Vec<&[u8]> {
             continue;
         }
         let dict = &data[dict_start(data, kw)..kw];
+        if find_all(dict, b"/ObjStm").next().is_none() {
+            continue;
+        }
         if !(find_all(dict, b"/FlateDecode").next().is_some()
             || find_all(dict, b"/Fl").any(|i| is_delim(dict.get(i + 3))))
         {
@@ -210,17 +218,28 @@ mod tests {
     fn unknown_when_nothing_is_found() {
         assert_eq!(pdf_pages(b"%PDF-1.7\n%%EOF"), None);
         // A broken stream is skipped, not fatal.
-        assert_eq!(pdf_pages(b"%PDF-1.7\n<< /Filter /FlateDecode >>\nstream\nnot zlib\nendstream"), None);
+        assert_eq!(pdf_pages(b"%PDF-1.7\n<< /Type /ObjStm /Filter /FlateDecode >>\nstream\nnot zlib\nendstream"), None);
     }
 
     #[test]
     fn a_decompression_bomb_is_bounded() {
         let bomb = deflate(&vec![b' '; 80 * 1024 * 1024]);
-        let mut pdf = b"%PDF-1.7\n<< /Filter /FlateDecode >>\nstream\n".to_vec();
+        let mut pdf = b"%PDF-1.7\n<< /Type /ObjStm /Filter /FlateDecode >>\nstream\n".to_vec();
         pdf.extend_from_slice(&bomb);
         pdf.extend_from_slice(b"\nendstream\n<< /Type /Page >>");
         let t = std::time::Instant::now();
         assert_eq!(pdf_pages(&pdf), Some(1));
         assert!(t.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn content_streams_are_not_inflated() {
+        // A page dictionary inside a content (non-object) stream is not a page object.
+        let content = deflate(b"<< /Type /Page >> << /Type /Page >>");
+        let mut pdf =
+            b"%PDF-1.7\n1 0 obj << /Type /Page >> endobj\n<< /Filter /FlateDecode /Length 9 >>\nstream\n".to_vec();
+        pdf.extend_from_slice(&content);
+        pdf.extend_from_slice(b"\nendstream\n");
+        assert_eq!(pdf_pages(&pdf), Some(1));
     }
 }
