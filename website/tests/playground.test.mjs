@@ -91,6 +91,12 @@ test("renderMarkdown keeps provider HTML tables with numeric spans only", () => 
 
 test("authHeaders: free tier sends a bearer, own keys send one header per chosen provider", () => {
   assert.deepEqual(pg.authHeaders({ mode: "free", token: "jwt" }, ["reducto"]), { Authorization: "Bearer jwt" });
+  // The token is read on every call, so a session refreshed mid-run is picked up by the next poll.
+  const session = { access_token: "jwt-1" };
+  const live = { mode: "free", get token() { return session.access_token; } };
+  assert.deepEqual(pg.authHeaders(live), { Authorization: "Bearer jwt-1" });
+  session.access_token = "jwt-2";
+  assert.deepEqual(pg.authHeaders(live), { Authorization: "Bearer jwt-2" });
   const byok = pg.authHeaders({ mode: "byok", keys: { reducto: "r", extend: "e", llamaparse: "" } }, ["reducto", "llamaparse"]);
   assert.deepEqual(byok, { "x-provider-key-reducto": "r" });
   assert.equal("Authorization" in byok, false);
