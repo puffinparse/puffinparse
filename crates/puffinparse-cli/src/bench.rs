@@ -831,15 +831,17 @@ fn report(args: ReportArgs) -> Result<()> {
 }
 
 /// The leaderboard page: `intro`, then one section per dataset. Datasets are ordered by their
-/// newest run (`created_at`, RFC 3339, so it sorts as text), newest first; ties break on the name.
+/// newest run (`created_at`), newest first; ties break on the name.
 fn render_by_dataset(runs: &[RunResult], intro: Option<&str>) -> String {
     let mut groups: BTreeMap<&str, Vec<RunResult>> = BTreeMap::new();
     for run in runs {
         groups.entry(run.dataset.name.as_str()).or_default().push(run.clone());
     }
-    let mut order: Vec<(&str, &str)> =
-        groups.iter().map(|(name, rs)| (*name, rs.iter().map(|r| r.created_at.as_str()).max().unwrap_or(""))).collect();
-    order.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let mut order: Vec<(&str, RunTime)> = groups
+        .iter()
+        .map(|(name, rs)| (*name, rs.iter().map(|r| run_time(&r.created_at)).max().unwrap_or_default()))
+        .collect();
+    order.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
     let mut out = String::new();
     if let Some(intro) = intro.map(str::trim).filter(|s| !s.is_empty()) {
         out.push_str(intro);
@@ -850,6 +852,15 @@ fn render_by_dataset(runs: &[RunResult], intro: Option<&str>) -> String {
         out.push_str(&format!("## {name}{headline}\n\n{}\n\n", render_markdown(&groups[name]).trim_end()));
     }
     format!("{}\n", out.trim_end())
+}
+
+/// When a run was created, for ordering. RFC 3339 strings of different precision do not sort as
+/// text (`...00Z` > `...00.500Z`), so valid ones compare as instants; an unparseable value sorts
+/// before every valid one, by its raw text.
+type RunTime = (Option<chrono::DateTime<chrono::FixedOffset>>, String);
+
+fn run_time(created_at: &str) -> RunTime {
+    (chrono::DateTime::parse_from_rfc3339(created_at).ok(), created_at.to_string())
 }
 
 fn render_markdown(runs: &[RunResult]) -> String {
@@ -988,6 +999,31 @@ mod tests {
             render_by_dataset(&runs, Some(&intro)) == committed,
             "benchmark/LEADERBOARD.md is stale: run `make leaderboard`"
         );
+    }
+
+    /// The headline is the dataset with the newest run by instant, not by string order.
+    #[test]
+    fn by_dataset_orders_by_instant_not_text() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = std::fs::read_dir(root.join("benchmark/results"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "json"))
+            .unwrap();
+        let base: RunResult = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let run = |name: &str, created_at: &str| {
+            let mut r = base.clone();
+            r.dataset.name = name.into();
+            r.created_at = created_at.into();
+            r
+        };
+        // As text "...00Z" sorts after "...00.500Z", though it is half a second older.
+        let runs = [run("older", "2026-01-01T00:00:00Z"), run("newer", "2026-01-01T00:00:00.500Z")];
+        let page = render_by_dataset(&runs, None);
+        assert!(page.starts_with("## newer (headline)"), "{}", &page[..page.len().min(200)]);
+        // An offset is honoured too, and an unparseable value never wins.
+        let runs = [run("utc", "2026-01-01T01:00:00Z"), run("plus2", "2026-01-01T02:30:00+02:00"), run("junk", "zzz")];
+        assert!(render_by_dataset(&runs, None).starts_with("## utc (headline)"));
     }
 
     #[test]
