@@ -29,7 +29,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 bytes = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
 # Supabase JWT verification (JWKS + HS256 fallback). aws-lc-rs is already in the tree via rustls.
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 # Fetching the Supabase JWKS. Already a dependency of the core; no provider logic here.
