@@ -23,7 +23,9 @@ standard library. No syntax highlighter is used, so code blocks stay plain ``<pr
 from __future__ import annotations
 
 import argparse
+import base64
 import glob
+import hashlib
 import html
 import importlib.util
 import json
@@ -821,6 +823,7 @@ def landing_html(site: Site, providers: list[dict[str, Any]]) -> str:
         "URL_BENCH": site.url("benchmark"),
         "URL_LEADERBOARD": site.url("benchmark/leaderboard"),
         "URL_VIEWER": site.viewer_url,
+        "URL_PLAYGROUND": f"{site.base}{PLAYGROUND}/",
         "URL_COMPAT": site.url("project/compat"),
         "URL_PYTHON": site.url("python"),
         "URL_SPEC": site.url("project/spec"),
@@ -831,6 +834,346 @@ def landing_html(site: Site, providers: list[dict[str, Any]]) -> str:
     if left:
         raise SystemExit(f"landing template: unsubstituted placeholder(s): {sorted(set(left))}")
     return template
+
+
+# ----------------------------------------------------------------------------------- playground
+#
+# /playground/: upload a document (or pick a sample) and compare up to three models side by side.
+# The page is static. Live runs go to the gateway's playground API (docs/SERVER.md, "Playground
+# API"), whose address and the public Supabase / Turnstile identifiers come from environment
+# variables at build time; without them the page ships with sample documents only. Samples are
+# the committed benchmark outputs, so showing them calls no provider and costs nothing.
+
+PLAYGROUND = "playground"
+# OWNER DECISION (pending): the gateway's public origin. vercel.json's /playground/ CSP must list
+# the same origin in connect-src (--check enforces it); PUFFINPARSE_PLAYGROUND_API switches live
+# runs on and may only be this origin or http://localhost for local testing.
+PLAYGROUND_API_ORIGIN = "https://api.puffinparse.com"
+# Public, non-secret build settings (set them in the Vercel project, never in the repository).
+PLAYGROUND_ENV = {
+    "api": "PUFFINPARSE_PLAYGROUND_API",
+    "supabase_url": "PUFFINPARSE_SUPABASE_URL",
+    "supabase_anon_key": "PUFFINPARSE_SUPABASE_ANON_KEY",
+    "turnstile_site_key": "PUFFINPARSE_TURNSTILE_SITE_KEY",
+}
+# supabase-js, pinned with Subresource Integrity (sha384 of the exact file; jsdelivr's own sha256
+# for the same file is 1qXEQUpdTOZG2cHeIjqnBn0/9mTBU5T/63/P/HYzVKM=). Bump both together.
+SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"
+SUPABASE_JS_SRI = "sha384-BWcjm9OdFth9TbhCxZPdm+gAOUMAzQy9nmTs12ioXdCcbVnJaPMn+fMUoQCLt60R"
+# Cloudflare serves Turnstile's loader unversioned and asks sites not to pin or proxy it, so it
+# cannot carry SRI; the CSP limits it to challenges.cloudflare.com.
+TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+# Defaults the page shows before the gateway reports its own (GET /v1/playground/config wins).
+PLAYGROUND_LIMITS = {
+    "max_file_bytes": 4 * 1024 * 1024,
+    "accepted_types": ["application/pdf", "image/png", "image/jpeg"],
+    "models_per_run": 3,
+    "pages_per_run": 10,
+    "model_pages_per_day": 30,
+}
+# OWNER DECISION (pending): the free-tier price ceiling, in USD per page. Free-tier models are the
+# cheaper ones: one 10-page run on three of them stays well inside the daily budget. Dearer models
+# are offered with your own key only. The gateway's list (its own copy of this ceiling) wins.
+FREE_TIER_MAX_PRICE_PER_PAGE = 0.025
+# OWNER DECISION (pending): the sample set. Ids in the newest combined run, from sources whose
+# licence allows redistribution (CC0, Apache-2.0, MIT). Never a `fetch-required` document.
+PLAYGROUND_SAMPLES = (
+    "synthetic/invoice_001",
+    "synthetic/two_column_001",
+    "synthetic/noisy_scan_001",
+    "parsebench/1653739079_page2",
+    "dpbench/01030000000045",
+)
+SAMPLE_LICENSES = {"CC0-1.0", "Apache-2.0", "MIT"}
+SAMPLE_BLOCKED_SOURCES = {"omnidocbench"}
+MEDIA_TYPES = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+_viewer_build: Any = None
+
+
+def viewer_build() -> Any:
+    """``benchmark/site/build.py`` as a module (its document naming and PDF page rendering)."""
+    global _viewer_build
+    if _viewer_build is None:
+        spec = importlib.util.spec_from_file_location("puffinparse_benchmark_site_build", BENCH_BUILD)
+        if spec is None or spec.loader is None:  # pragma: no cover - importlib contract
+            raise SystemExit(f"cannot load {BENCH_BUILD}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _viewer_build = module
+    return _viewer_build
+
+
+def job_providers() -> set[str]:
+    """Providers with a job queue (they implement ``submit_parse``); the playground runs on the
+    gateway's jobs API, so only these can be offered live."""
+    found = set()
+    for path in (ROOT / "crates/puffinparse-core/src/providers").glob("*.rs"):
+        if "fn submit_parse" in path.read_text(encoding="utf-8"):
+            found.add(path.stem)
+    return found
+
+
+def playground_models(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hosted, live-verified, parse-capable models whose provider has a job queue, with list price.
+
+    Local and self-hosted engines (``SELF_HOSTED`` in model.rs) never run on the hosted
+    playground; they have no API key, so they are recognised by an empty ``env_var``.
+    """
+    pricing_json = ROOT / "crates/puffinparse-core/src/pricing.json"
+    prices = json.loads(pricing_json.read_text(encoding="utf-8")) if pricing_json.exists() else {}
+    queued = job_providers()
+    models = []
+    for p in providers:
+        if not p["verified"] or not p["env_var"] or p["name"] not in queued:
+            continue
+        for m in p["models"]:
+            if "parse" not in m["modes"]:
+                continue
+            price = (prices.get(m["qualified"]) or {}).get("parse")
+            models.append(
+                {
+                    "id": m["qualified"],
+                    "provider": p["name"],
+                    "provider_name": p["display_name"],
+                    "model": m["model"],
+                    "description": m["description"],
+                    "default": m["default"],
+                    "price_per_page_usd": price,
+                    "free_tier": isinstance(price, (int, float)) and price <= FREE_TIER_MAX_PRICE_PER_PAGE,
+                }
+            )
+    return models
+
+
+def playground_settings() -> tuple[dict[str, str], list[str]]:
+    """The public playground settings from the environment, and any problems with them."""
+    values = {k: os.environ.get(v, "").strip() for k, v in PLAYGROUND_ENV.items()}
+    problems = []
+    local = re.compile(r"^http://(localhost|127\.0\.0\.1)(:\d+)?$")
+    api = values["api"].rstrip("/")
+    values["api"] = api
+    if api and not (api == PLAYGROUND_API_ORIGIN or local.match(api)):
+        problems.append(f"{PLAYGROUND_ENV['api']} must be {PLAYGROUND_API_ORIGIN} (or http://localhost)")
+    supa = values["supabase_url"].rstrip("/")
+    values["supabase_url"] = supa
+    if supa and not (re.fullmatch(r"https://[a-z0-9-]+\.supabase\.co", supa) or local.match(supa)):
+        name = PLAYGROUND_ENV["supabase_url"]
+        problems.append(f"{name} must be https://<project>.supabase.co (the CSP allows only that)")
+    if bool(supa) != bool(values["supabase_anon_key"]):
+        problems.append(
+            f"set both {PLAYGROUND_ENV['supabase_url']} and {PLAYGROUND_ENV['supabase_anon_key']}, or neither"
+        )
+    return values, problems
+
+
+def newest_combined_run() -> Optional[dict[str, Any]]:
+    """The run the samples come from: the newest run on the newest ``combined-vN`` dataset."""
+    best: Optional[tuple[tuple[int, str], dict[str, Any]]] = None
+    for path in sorted((ROOT / "benchmark/results").glob("*.json")):
+        try:
+            run = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        match = re.fullmatch(r"combined-v(\d+)", str(run.get("dataset", {}).get("name", "")))
+        if not match or "run_id" not in run:
+            continue
+        key = (int(match.group(1)), str(run.get("created_at", "")))
+        if best is None or key > best[0]:
+            best = (key, run)
+    return best[1] if best else None
+
+
+def build_samples(site: Site, out: Path, allowed: set[str]) -> dict[str, Any]:
+    """Copy the sample documents, a page preview and every model's committed output into
+    ``<out>/playground/samples/`` and return the index the page loads. No provider is called.
+    Only outputs of ``allowed`` models (the hosted playground list) are published with a sample."""
+    run = newest_combined_run()
+    if run is None:
+        return {"run": None, "samples": []}
+    vb = viewer_build()
+    dataset = str(run["dataset"]["name"])
+    manifest_path = ROOT / "benchmark/datasets" / dataset / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    vb.name_documents(manifest["documents"], dataset)
+    docs = {str(d["id"]): d for d in manifest["documents"]}
+    records = {str(m["model"]): {str(d["id"]): d for d in m.get("docs", [])} for m in run.get("models", [])}
+    root = out / PLAYGROUND / "samples"
+    url = f"{site.base}{PLAYGROUND}/samples/"
+    samples = []
+    for doc_id in PLAYGROUND_SAMPLES:
+        doc = docs.get(doc_id)
+        if doc is None:
+            raise SystemExit(f"playground sample {doc_id} is not in {dataset}")
+        source = doc_id.split("/", 1)[0]
+        if source in SAMPLE_BLOCKED_SOURCES or "fetch-required" in (doc.get("tags") or []):
+            raise SystemExit(f"playground sample {doc_id}: its source does not allow redistribution")
+        if doc.get("license") not in SAMPLE_LICENSES:
+            raise SystemExit(f"playground sample {doc_id}: licence {doc.get('license')!r} is not allowed")
+        src = (manifest_path.parent / str(doc["file"])).resolve()
+        ext = src.suffix.lower()
+        if ext not in MEDIA_TYPES or not src.is_file():
+            raise SystemExit(f"playground sample {doc_id}: missing or unsupported input {src}")
+        slug = doc_id.replace("/", "--")
+        target = root / slug
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, target / f"input{ext}")
+        previews = []
+        if ext == ".pdf":
+            ext_img = vb.pdf_preview_ext()
+            if ext_img:
+                pages = max(1, min(int(doc.get("pages") or 1), 2))
+                paths = [target / f"page-{n}{ext_img}" for n in range(1, pages + 1)]
+                done = vb.render_pdf_pages(src, paths)
+                previews = [f"{url}{slug}/{p.name}" for p in paths[:done]]
+        else:
+            previews = [f"{url}{slug}/input{ext}"]
+        outputs = []
+        for model, by_doc in records.items():
+            if model not in allowed:
+                continue
+            rec = by_doc.get(doc_id)
+            md = ROOT / "benchmark/results/outputs" / str(run["run_id"]) / vb.model_slug(model)
+            md = md / f"{doc_id}.md"
+            if rec is None or not md.is_file():
+                continue
+            (target / "outputs").mkdir(exist_ok=True)
+            shutil.copyfile(md, target / "outputs" / f"{vb.model_slug(model)}.md")
+            outputs.append(
+                {
+                    "model": model,
+                    "markdown": f"{url}{slug}/outputs/{vb.model_slug(model)}.md",
+                    "latency_ms": rec.get("latency_ms"),
+                    "cost_usd": rec.get("cost_usd"),
+                    "pages": rec.get("pages"),
+                    "score": round(float(rec["headline"]) * 100, 1)
+                    if isinstance(rec.get("headline"), (int, float))
+                    else None,
+                    "viewer": f"{site.viewer_url}#/{run['run_id']}/{vb.model_slug(model)}/{doc_id}",
+                }
+            )
+        samples.append(
+            {
+                "id": doc_id,
+                "slug": slug,
+                "title": doc["title"],
+                "source": doc["source_label"],
+                "category": doc["category_label"],
+                "license": doc["license"],
+                "license_url": LICENSE_URLS.get(doc["license"], ""),
+                "attribution": doc.get("attribution") or "",
+                "pages": int(doc.get("pages") or 1),
+                "file": f"{url}{slug}/input{ext}",
+                "filename": f"{slug}{ext}",
+                "media_type": MEDIA_TYPES[ext],
+                "bytes": src.stat().st_size,
+                "previews": previews,
+                "outputs": outputs,
+            }
+        )
+    index = {
+        "run": {
+            "id": run["run_id"],
+            "created_at": run.get("created_at"),
+            "dataset": f"{dataset} v{run['dataset'].get('version', '?')}",
+        },
+        "samples": samples,
+    }
+    (root / "index.json").write_text(json.dumps(index, indent=1) + "\n", encoding="utf-8")
+    return index
+
+
+def playground_jsonld(site: Site, description: str) -> str:
+    home = site.absolute(site.base)
+    return json_ld(
+        {
+            "@type": "WebApplication",
+            "name": f"{site.title} Playground",
+            "description": description,
+            "url": site.absolute(f"{site.base}{PLAYGROUND}/"),
+            "applicationCategory": "DeveloperApplication",
+            "operatingSystem": "Any (web browser)",
+            "isAccessibleForFree": True,
+            "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+            "isPartOf": {"@type": "WebSite", "@id": f"{home}#website", "name": site.title, "url": home},
+            "about": {"@id": f"{home}#software"},
+        }
+    )
+
+
+def playground_html(site: Site, models: list[dict[str, Any]], index: dict[str, Any]) -> str:
+    template = (WEB / "playground" / "index.html").read_text(encoding="utf-8")
+    settings, problems = playground_settings()
+    for problem in problems:
+        print(f"playground: {problem}; live runs are disabled in this build", file=sys.stderr)
+    live = bool(settings["api"]) and not problems
+    auth = live and bool(settings["supabase_url"])
+    config = {
+        "api": settings["api"] if live else "",
+        "supabase": (
+            {"url": settings["supabase_url"], "anon_key": settings["supabase_anon_key"]} if auth else None
+        ),
+        "turnstile_site_key": settings["turnstile_site_key"] if live else "",
+        "limits": PLAYGROUND_LIMITS,
+        "models": models,
+        "samples_url": f"{site.base}{PLAYGROUND}/samples/index.json",
+        "viewer_url": site.viewer_url,
+        "docs_url": site.docs_base,
+    }
+    scripts = []
+    if auth:
+        sri = f'integrity="{SUPABASE_JS_SRI}" crossorigin="anonymous"'
+        scripts.append(f'<script src="{SUPABASE_JS}" {sri} defer></script>')
+    if live and settings["turnstile_site_key"]:
+        scripts.append(f'<script src="{TURNSTILE_JS}" async defer></script>')
+    description = (
+        "Run a PDF or image through up to three document parsers and compare their Markdown side "
+        "by side, with latency and cost. Sample documents show committed benchmark outputs for free."
+    )
+    run = index.get("run") or {}
+    values = {
+        "BASE": site.base,
+        "FAVICON": FAVICON,
+        "MARK": MARK,
+        "SOCIAL": social_meta(
+            site, f"Playground · {site.title}", description, site.absolute(f"{site.base}{PLAYGROUND}/")
+        ),
+        "ANALYTICS": ANALYTICS,
+        "JSONLD": playground_jsonld(site, description),
+        "API_LINKS": api_links(site),
+        "CANONICAL": site.absolute(f"{site.base}{PLAYGROUND}/"),
+        "DESCRIPTION": html.escape(description, quote=True),
+        "THEME_BUTTON": THEME_BUTTON,
+        "GH_STAR": gh_star(site.repo, "hide-sm"),
+        "URL_DOCS": site.docs_base,
+        "URL_VIEWER": site.viewer_url,
+        "URL_GATEWAY": site.url("gateway"),
+        "URL_SECURITY": site.url("project/security"),
+        "REPO": site.repo,
+        # JSON inside <script type="application/json">: only "</" could end the element early.
+        "CONFIG": json.dumps(config, separators=(",", ":")).replace("</", "<\\/"),
+        "THIRD_PARTY": "\n".join(scripts),
+        "N_SAMPLES": str(len(index.get("samples", []))),
+        "SAMPLE_RUN": html.escape(str(run.get("dataset", ""))),
+        "LIMIT_MB": str(PLAYGROUND_LIMITS["max_file_bytes"] // (1024 * 1024)),
+        "LIMIT_PAGES": str(PLAYGROUND_LIMITS["pages_per_run"]),
+        "LIMIT_MODELS": str(PLAYGROUND_LIMITS["models_per_run"]),
+        "LIMIT_DAILY": str(PLAYGROUND_LIMITS["model_pages_per_day"]),
+    }
+    for key, value in values.items():
+        template = template.replace("{{" + key + "}}", value)
+    left = re.findall(r"\{\{(\w+)\}\}", template)
+    if left:
+        raise SystemExit(f"playground template: unsubstituted placeholder(s): {sorted(set(left))}")
+    return template
+
+
+def build_playground(site: Site, out: Path, providers: list[dict[str, Any]]) -> None:
+    models = playground_models(providers)
+    index = build_samples(site, out, {m["id"] for m in models})
+    page = out / PLAYGROUND / "index.html"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(playground_html(site, models, index), encoding="utf-8")
 
 
 # ------------------------------------------------------------------------------------- template
@@ -907,6 +1250,7 @@ if(t)document.documentElement.setAttribute('data-theme',t);}}catch(e){{}}}})();<
 <div id="results" role="listbox" hidden></div>
 </div>
 <span class="kbd hide-sm">/</span>
+<a class="plain hide-sm" href="{site.base}{PLAYGROUND}/">Playground</a>
 <a class="plain hide-sm" href="{site.base}llms.txt">llms.txt</a>
 {gh_star(site.repo, "hide-sm")}
 {THEME_BUTTON}
@@ -1027,6 +1371,7 @@ def build(base: str, out_dir: Path, site_url: str, docs_prefix: str = "docs") ->
         (target / "index.md").write_text(page.text.rstrip() + "\n", encoding="utf-8")
 
     (out_dir / "index.html").write_text(landing_html(site, providers), encoding="utf-8")
+    build_playground(site, out_dir, providers)
     write_extras(site, pages, out_dir)
     return site, pages
 
@@ -1088,6 +1433,8 @@ def write_extras(site: Site, pages: list[Page], out: Path) -> None:
         "landing.css",
         "app.js",
         "stars.js",
+        "playground.css",
+        "playground.js",
         "mark.svg",
         "puffin.svg",
         OG_IMAGE,
@@ -1179,7 +1526,11 @@ def write_extras(site: Site, pages: list[Page], out: Path) -> None:
         ]
     (out / "llms-full.txt").write_text("\n".join(full), encoding="utf-8")
 
-    locs = [site.absolute(site.base), *(site.absolute(site.url(p.slug)) for p in pages)]
+    locs = [
+        site.absolute(site.base),
+        site.absolute(f"{site.base}{PLAYGROUND}/"),
+        *(site.absolute(site.url(p.slug)) for p in pages),
+    ]
     urls = "".join(f"<url><loc>{loc}</loc></url>" for loc in locs)
     (out / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -1448,6 +1799,7 @@ JSONLD_TYPES = {
     "Offer",
     "CreativeWork",
     "TechArticle",
+    "WebApplication",
     "MediaObject",
     "Dataset",
     "DataDownload",
@@ -1487,6 +1839,55 @@ def check_jsonld(rel: Path, text: str, required: bool) -> list[str]:
 
 
 ID_RE = re.compile(r'id="([^"]+)"')
+INLINE_SCRIPT_RE = re.compile(r"<script>(.*?)</script>", re.S)
+
+
+def check_playground(site: Site, out: Path, path: Path = VERCEL_JSON) -> list[str]:
+    """The playground's samples are redistributable and present, and its Content-Security-Policy
+    in vercel.json allows exactly what the page loads: the hash of every inline script, the
+    pinned supabase-js, Turnstile, and the API origin this build points at."""
+    problems: list[str] = []
+    page = out / PLAYGROUND / "index.html"
+    if not page.is_file():
+        return [f"{PLAYGROUND}/index.html was not generated"]
+    index_path = out / PLAYGROUND / "samples" / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.is_file() else {}
+    if not index.get("samples"):
+        problems.append(f"{PLAYGROUND}: no sample documents were built")
+    for sample in index.get("samples", []):
+        blocked = sample["id"].split("/", 1)[0] in SAMPLE_BLOCKED_SOURCES
+        if blocked or sample["license"] not in SAMPLE_LICENSES:
+            problems.append(f"{PLAYGROUND}: sample {sample['id']} is not redistributable")
+        for rel in [sample["file"], *sample["previews"], *(o["markdown"] for o in sample["outputs"])]:
+            if not (out / rel[len(site.base) :]).is_file():
+                problems.append(f"{PLAYGROUND}: sample {sample['id']} -> missing {rel}")
+        if not sample["outputs"]:
+            problems.append(f"{PLAYGROUND}: sample {sample['id']} has no model outputs")
+    if site.base != "/" or not path.exists():
+        return problems  # vercel.json describes the root deployment only
+    policy = ""
+    for rule in json.loads(path.read_text(encoding="utf-8")).get("headers", []):
+        if rule.get("source") == f"/{PLAYGROUND}/(.*)":
+            for header in rule.get("headers", []):
+                if header["key"].startswith("Content-Security-Policy"):
+                    policy = header["value"]
+    if not policy:
+        return [*problems, f"{path.name}: no Content-Security-Policy for /{PLAYGROUND}/"]
+    text = page.read_text(encoding="utf-8")
+    for body in INLINE_SCRIPT_RE.findall(text):
+        digest = "sha256-" + base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode()
+        if f"'{digest}'" not in policy:
+            problems.append(f"{path.name}: the /{PLAYGROUND}/ CSP lacks '{digest}' for an inline script")
+    # The supabase-js source is pinned to its version directory, so a bump must touch the CSP too.
+    for needed in (SUPABASE_JS.rsplit("/dist/", 1)[0] + "/", "https://challenges.cloudflare.com"):
+        if needed not in policy:
+            problems.append(f"{path.name}: the /{PLAYGROUND}/ CSP does not allow {needed}")
+    connect = next((d for d in policy.split(";") if d.strip().startswith("connect-src")), "")
+    if PLAYGROUND_API_ORIGIN not in connect.split():
+        problems.append(
+            f"{path.name}: the /{PLAYGROUND}/ CSP connect-src does not allow {PLAYGROUND_API_ORIGIN}"
+        )
+    return problems
 
 
 def check(site: Site, pages: list[Page], out: Path) -> int:
@@ -1505,6 +1906,7 @@ def check(site: Site, pages: list[Page], out: Path) -> int:
         problems.append(f"index.html: the landing page does not link to {site.docs_base}")
     if site.base == "/":
         problems.extend(check_redirects(site, pages, out))
+    problems.extend(check_playground(site, out))
     for f in files:
         text = f.read_text(encoding="utf-8")
         ids[f] = set(ID_RE.findall(text))

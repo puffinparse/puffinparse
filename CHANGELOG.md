@@ -9,6 +9,27 @@ Python package `puffinparse` share a single version. Entries before the rename s
 
 ## [Unreleased]
 
+### Added
+
+- Website `/playground/`: pick a sample document (or, once a gateway is configured, upload a PDF or
+  image) and compare up to three models' Markdown side by side, with latency, pages and cost.
+  Samples are five redistributable documents from the newest `combined-v3` run with their committed
+  outputs, so showing them calls no provider. Live runs are off until the build gets
+  `PUFFINPARSE_PLAYGROUND_API`; they offer a signed-in free tier (Supabase, Turnstile, daily
+  model-page allowance) or your own provider keys, which are sent per request and never stored.
+  Model output is rendered by an escaping Markdown renderer, and `/playground/` has a stricter
+  Content-Security-Policy. The browser/gateway contract is in `docs/SERVER.md` ("Playground API"),
+  the free-tier counters in `infra/supabase/`, and offline tests in `website/tests/`.
+- Gateway playground API (`[playground]`, off by default): `GET /v1/playground/config` and
+  `POST /v1/playground/runs`, one async job per model, polled through `GET /v1/jobs/{id}` by the
+  same signed-in user or the same provider key only. The free tier verifies Supabase access tokens
+  (JWKS, or HS256 with a legacy secret), requires Turnstile, reserves the user's daily model-pages
+  (counted by the gateway, compressed PDF object streams included) and the run's estimated cost
+  against the day's spend cap, both at submit time, and limits each job to the reserved pages; own
+  keys arrive as `x-provider-key-<provider>` and are never stored or logged. Per-IP run limits,
+  per-owner poll limits, CORS for the configured origins on those routes only, and error bodies may
+  now carry `details`. A Cloud Run service and config are in `deploy/cloudrun/`.
+
 ### Security
 
 - Real provider ids are gone from committed test data: the Extend run, parse-run and file ids and

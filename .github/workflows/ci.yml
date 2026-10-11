@@ -162,6 +162,11 @@ jobs:
       - name: Test
         run: npm test
 
+      # The website playground's own helpers (no browser, no network, no addon needed).
+      - name: Website playground tests
+        working-directory: .
+        run: node --test website/tests/*.test.mjs
+
   site:
     name: Site (build, link check, agent QA)
     runs-on: ubuntu-latest

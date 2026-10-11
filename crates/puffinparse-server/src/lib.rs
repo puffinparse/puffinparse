@@ -14,11 +14,14 @@
 #![forbid(unsafe_code)]
 
 mod api;
+mod auth;
 pub mod config;
 pub mod error;
 mod jobs;
 pub mod log;
 pub mod metrics;
+mod pages;
+mod playground;
 pub mod usage;
 
 pub use config::Config;
@@ -91,6 +94,8 @@ pub struct AppState {
     pub(crate) usage: usage::UsageStore,
     pub(crate) metrics: metrics::Metrics,
     pub(crate) logger: log::Logger,
+    /// `/v1/playground/*`; `None` = off (404).
+    pub(crate) playground: Option<Arc<playground::Playground>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -107,6 +112,7 @@ impl std::fmt::Debug for AppState {
             .field("aliases", &self.aliases)
             .field("keys", &self.keys)
             .field("webhook_secret", &self.webhook_secret.as_ref().map(|_| REDACTED))
+            .field("playground", &self.playground)
             .finish_non_exhaustive()
     }
 }
@@ -200,6 +206,7 @@ impl AppState {
             None => log::Logger::new(cfg.server.log_stdout, cfg.server.log_file.as_deref())?,
         };
         let usage = usage::UsageStore::new(cfg.server.state_file.clone())?;
+        let playground = playground::Playground::new(&cfg.playground)?;
         Ok(Self {
             server: cfg.server,
             master_key,
@@ -210,6 +217,7 @@ impl AppState {
             usage,
             metrics: metrics::Metrics::default(),
             logger,
+            playground,
         })
     }
 
@@ -283,8 +291,8 @@ async fn serve_connections(
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let stream = match accepted {
-                    Ok((stream, _)) => stream,
+                let (stream, peer) = match accepted {
+                    Ok(pair) => pair,
                     Err(e) => {
                         // Out of file descriptors and similar: back off instead of spinning.
                         tracing::warn!(error = %e, "gateway: accept failed");
@@ -292,7 +300,14 @@ async fn serve_connections(
                         continue;
                     }
                 };
-                let service = hyper_util::service::TowerToHyperService::new(app.clone());
+                // The peer address, for the playground's per-IP limits.
+                let svc = tower::ServiceBuilder::new()
+                    .map_request(move |mut r: hyper::Request<hyper::body::Incoming>| {
+                        r.extensions_mut().insert(playground::PeerAddr(peer));
+                        r
+                    })
+                    .service(app.clone());
+                let service = hyper_util::service::TowerToHyperService::new(svc);
                 let conn = graceful.watch(http.serve_connection(TokioIo::new(stream), service));
                 tokio::spawn(async move {
                     if let Err(e) = conn.await {

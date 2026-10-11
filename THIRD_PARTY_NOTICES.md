@@ -4,7 +4,7 @@
 
 PuffinParse is MIT licensed (see [LICENSE](LICENSE)). The compiled artifacts (the `puffinparse`
 CLI and Docker image, the Python wheel and the Node addon) statically link the Rust crates
-below: 274 crates, the normal-dependency closure of the workspace on every target.
+below: 279 crates, the normal-dependency closure of the workspace on every target.
 Each is used under the licence its authors chose; where a crate offers a choice, PuffinParse
 uses it under a permissive option (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, ...). No
 dependency is available only under a copyleft licence.
@@ -27,14 +27,14 @@ of [README.md](README.md) and each `benchmark/datasets/*/README.md`.
 
 | Licence | Crates |
 |---|---:|
-| `MIT OR Apache-2.0` | 152 |
-| `MIT` | 51 |
-| `Apache-2.0 OR MIT` | 19 |
+| `MIT OR Apache-2.0` | 153 |
+| `MIT` | 52 |
+| `Apache-2.0 OR MIT` | 21 |
 | `Unicode-3.0` | 18 |
 | `MIT/Apache-2.0` | 5 |
+| `ISC` | 4 |
 | `Apache-2.0 OR ISC OR MIT` | 3 |
 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | 3 |
-| `ISC` | 3 |
 | `Apache-2.0` | 2 |
 | `MIT OR Apache-2.0 OR Zlib` | 2 |
 | `Unlicense OR MIT` | 2 |
@@ -100,11 +100,13 @@ of [README.md](README.md) and each `benchmark/datasets/*/README.md`.
 - [pin-project-lite 0.2.17](https://github.com/taiki-e/pin-project-lite)
 - [portable-atomic 1.15.0](https://github.com/taiki-e/portable-atomic)
 - [rustc-hash 2.1.3](https://github.com/rust-lang/rustc-hash)
+- [signature 2.2.0](https://github.com/RustCrypto/traits/tree/master/signature)
 - [simd_cesu8 1.2.0](https://github.com/seancroach/simd_cesu8)
 - [utf8_iter 1.0.4](https://github.com/hsivonen/utf8_iter)
 - [utf8parse 0.2.2](https://github.com/alacritty/vte)
 - [uuid 1.26.1](https://github.com/uuid-rs/uuid)
 - [zeroize 1.9.0](https://github.com/RustCrypto/utils)
+- [zeroize_derive 1.5.0](https://github.com/RustCrypto/utils)
 
 ## `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT`
 
@@ -124,6 +126,7 @@ of [README.md](README.md) and each `benchmark/datasets/*/README.md`.
 
 - [libloading 0.9.0](https://github.com/nagisa/rust_libloading/)
 - [rustls-webpki 0.103.15](https://github.com/rustls/webpki)
+- [untrusted 0.7.1](https://github.com/briansmith/untrusted)
 - [untrusted 0.9.0](https://github.com/briansmith/untrusted)
 
 ## `ISC AND (Apache-2.0 OR ISC)`
@@ -150,6 +153,7 @@ of [README.md](README.md) and each `benchmark/datasets/*/README.md`.
 - [hyper 1.11.1](https://github.com/hyperium/hyper)
 - [hyper-util 0.1.20](https://github.com/hyperium/hyper-util)
 - [indicatif 0.18.6](https://github.com/console-rs/indicatif)
+- [jsonwebtoken 10.4.0](https://github.com/Keats/jsonwebtoken)
 - [matchers 0.2.0](https://github.com/hawkw/matchers)
 - [mime_guess 2.0.5](https://github.com/abonander/mime_guess)
 - [mio 1.2.3](https://github.com/tokio-rs/mio)
@@ -282,6 +286,7 @@ of [README.md](README.md) and each `benchmark/datasets/*/README.md`.
 - [quote 1.0.47](https://github.com/dtolnay/quote)
 - [rand 0.10.2](https://github.com/rust-random/rand)
 - [rand_core 0.10.1](https://github.com/rust-random/rand_core)
+- [rand_core 0.6.4](https://github.com/rust-random/rand)
 - [rand_pcg 0.10.2](https://github.com/rust-random/rngs)
 - [regex-automata 0.4.18](https://github.com/rust-lang/regex)
 - [regex-syntax 0.8.11](https://github.com/rust-lang/regex)

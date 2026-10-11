@@ -15,6 +15,9 @@ website/
   assets/style.css    the shared design system (docs chrome, prose, tokens)
   assets/landing.css  the landing layer: same tokens, bigger type, one vermilion accent
   assets/app.js       progressive enhancement for both halves
+  playground/         the /playground/ page template
+  assets/playground.* the playground's script and stylesheet (no dependencies)
+  tests/              offline tests for the playground script, and a fake playground API
   dist/               generated, git-ignored
 ```
 
@@ -119,6 +122,7 @@ follow the docs prefix and need no editing if it ever changes.
 | `.well-known/api-catalog` | RFC 9727 API catalog: a Linkset pointing at the data API, its OpenAPI description and its docs page. |
 | `404.html`, `404.md` | Not-found page, styled like the rest, pointing at both halves; `404.md` is what Markdown clients get. |
 | `style.css`, `landing.css`, `app.js` | Copied verbatim from `website/assets/`. |
+| `playground/index.html`, `playground/samples/` | The playground (below) and its sample documents with their saved model outputs. |
 
 Every HTML page carries `<meta name="description">`, `<link rel="canonical">` and
 `<link rel="alternate" type="text/markdown">` pointing at its `index.md`, the API discovery links
@@ -265,11 +269,49 @@ CSS and JavaScript were made for PuffinParse. The exceptions, and their notices:
 | GitHub mark in the header star button | `GH_STAR_ICON` in `build.py`, `benchmark/site/src/index.html` | GitHub [Octicons](https://github.com/primer/octicons) `mark-github-16`, Copyright (c) GitHub Inc., MIT. The notice is kept as an HTML comment next to the icon in the served markup. |
 | pdf.js 3.11.174 (results viewer only) | loaded on demand from cdnjs, pinned with SRI | [Mozilla pdf.js](https://github.com/mozilla/pdf.js), Apache-2.0. Not vendored. |
 | Vercel Web Analytics script | `/_vercel/insights/script.js`, Vercel builds only | Served by Vercel; not vendored. |
+| supabase-js 2.117.3 (playground only, when sign-in is configured) | loaded from jsdelivr, pinned with SRI | [Supabase](https://github.com/supabase/supabase-js), MIT. Not vendored. |
+| Cloudflare Turnstile (playground only, when configured) | loaded from challenges.cloudflare.com | Served by Cloudflare, which does not allow pinning it; not vendored. |
 | Fonts | `tokens.css` | System font stacks only; no font files are shipped or downloaded. |
 
 Benchmark data shown in the viewer keeps its own licence (see each
 `benchmark/datasets/*/README.md`). If you add a third-party asset, add a row here and a credit in
 the README's Acknowledgements.
+
+## The playground
+
+`/playground/` lets a visitor run one PDF or image through up to three models and compare the
+Markdown side by side. It is static: the page talks to the gateway's playground API
+([docs/SERVER.md](../docs/SERVER.md), "Playground API") straight from the browser.
+
+- **Samples** need no API at all. `build.py` copies five redistributable documents from the newest
+  `combined-vN` run (`PLAYGROUND_SAMPLES`; CC0, Apache-2.0 and MIT sources only, never
+  `fetch-required` ones) into `playground/samples/`, with each hosted model's committed output, so
+  showing them calls no provider. `--check` refuses a sample with any other licence.
+- **Live runs** are switched on by build-time environment variables (set them in the Vercel
+  project, never in the repository; all are public identifiers, not secrets):
+  `PUFFINPARSE_PLAYGROUND_API` (must be `PLAYGROUND_API_ORIGIN` in `build.py`, or
+  `http://localhost:<port>` for local testing), `PUFFINPARSE_SUPABASE_URL` and
+  `PUFFINPARSE_SUPABASE_ANON_KEY` (sign-in for the free tier), `PUFFINPARSE_TURNSTILE_SITE_KEY`.
+  Without them the page ships with samples only.
+- **Model output is untrusted.** The page renders it with its own small Markdown renderer that
+  escapes everything, keeps a short list of inline and table tags without attributes, keeps only
+  http(s) links and never loads images. `/playground/` has a stricter CSP in `vercel.json` (no
+  `'unsafe-inline'` scripts; the one inline script is allowed by hash), which `--check` verifies
+  against the built page.
+- Owner decisions that are single constants in `build.py`: `PLAYGROUND_API_ORIGIN` (the API host,
+  also in the CSP), `FREE_TIER_MAX_PRICE_PER_PAGE` (the gateway has its own copy, which wins) and
+  `PLAYGROUND_SAMPLES`.
+
+Test it offline:
+
+```bash
+node --test website/tests/*.test.mjs                       # renderer, API client, poller
+python website/tests/fake_playground_api.py --port 8766 &  # a fake gateway, no provider calls
+PUFFINPARSE_PLAYGROUND_API=http://localhost:8766 python website/build.py --out /tmp/site --no-benchmark
+python -m http.server -d /tmp/site 8001                    # http://localhost:8001/playground/
+```
+
+With the fake API, any key works and the key `bad` makes that provider's job fail.
 
 ## Deploying
 

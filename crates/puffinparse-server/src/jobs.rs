@@ -72,6 +72,7 @@ async fn handle_submit(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<
         output_format,
         outcome: None,
         created_unix: chrono::Utc::now().timestamp(),
+        playground: None,
     };
     let retention = i64::try_from(state.server.job_retention_hours.saturating_mul(3600)).unwrap_or(i64::MAX);
     state.usage.insert_job(&id, stored, retention);
@@ -115,6 +116,24 @@ pub(crate) async fn retrieve(State(state): State<Arc<AppState>>, Path(id): Path<
 }
 
 async fn handle_retrieve(state: &AppState, ctx: &mut Ctx, id: &str, req: Request) -> Result<Served, ApiError> {
+    // Playground jobs belong to a signed-in user or a provider key, not a gateway key.
+    if let Some(pg) = state.playground.as_ref() {
+        if let Some(job) = state.usage.job(id).filter(|j| j.playground.is_some()) {
+            if !api::is_master(state, req.headers()) {
+                let access = pg.job_access(state, req.headers(), id, &job).await?;
+                ctx.key_id = access.log_id;
+                ctx.job_id = Some(id.to_string());
+                ctx.requested = Some(job.handle.model.clone());
+                ctx.model = ctx.requested.clone();
+                let query: RetrieveQuery = Query::try_from_uri(req.uri())
+                    .map(|q| q.0)
+                    .map_err(|e| ApiError::input(format!("invalid query string: {}", e.body_text())))?;
+                let format = api::output_shape(query.output_format.as_deref())?;
+                let status = retrieve_status(state, &job, access.provider_key).await?;
+                return Ok(settle(state, ctx, id, &job, status, format));
+            }
+        }
+    }
     let who = api::authenticate(state, req.headers())?;
     ctx.key_id = who.id(state).to_string();
     let query: RetrieveQuery = Query::try_from_uri(req.uri())
@@ -131,7 +150,10 @@ async fn handle_retrieve(state: &AppState, ctx: &mut Ctx, id: &str, req: Request
     ctx.model = ctx.requested.clone();
     api::check_rate(state, &who)?;
     let format = api::output_shape(query.output_format.as_deref().or(job.output_format.as_deref()))?;
-    let status = retrieve_status(state, &job).await?;
+    if job.playground.is_some() && !matches!(who, Principal::Master) {
+        return Err(ApiError::not_found(format!("no job '{id}' for this key")));
+    }
+    let status = retrieve_status(state, &job, None).await?;
     Ok(settle(state, ctx, id, &job, status, format))
 }
 
@@ -152,10 +174,17 @@ fn deployment(state: &AppState, job: &StoredJob) -> Deployment {
 }
 
 /// One provider status check. `Err` means the check itself failed (auth, network, ...).
-async fn retrieve_status(state: &AppState, job: &StoredJob) -> Result<JobStatus, ApiError> {
+/// `key` replaces the configured credentials (own-key playground jobs).
+async fn retrieve_status(state: &AppState, job: &StoredJob, key: Option<String>) -> Result<JobStatus, ApiError> {
     let d = deployment(state, job);
+    if job.playground.as_ref().is_some_and(|p| p.user.is_none()) && key.is_none() {
+        // An own-key job has no gateway credentials to fall back to (master key, webhook).
+        return Err(ApiError::input(
+            "this job was submitted with the caller's own provider key; poll it with that key",
+        ));
+    }
     let opts = RetrieveOptions {
-        api_key: d.api_key,
+        api_key: key.or(d.api_key),
         base_url: d.base_url,
         timeout_secs: state.server.max_timeout_secs.min(RETRIEVE_TIMEOUT_SECS),
         max_retries: state.server.max_retries.min(10),
@@ -185,6 +214,9 @@ fn settle(
             if state.usage.settle_job(id, JobOutcome::Succeeded, resp.cost_usd.unwrap_or(0.0), resp.usage.pages) {
                 state.metrics.job_event("succeeded");
                 (pages, cost_usd) = (resp.usage.pages, resp.cost_usd);
+                if let Some(pg) = &state.playground {
+                    pg.settled(job, JobOutcome::Succeeded, resp.usage.pages, resp.cost_usd);
+                }
             }
             body["result"] = match format {
                 OutputShape::Puffinparse => serde_json::to_value(&*resp).unwrap_or(Value::Null),
@@ -195,6 +227,9 @@ fn settle(
         JobStatus::Failed(e) => {
             if state.usage.settle_job(id, JobOutcome::Failed, 0.0, 0) {
                 state.metrics.job_event("failed");
+                if let Some(pg) = &state.playground {
+                    pg.settled(job, JobOutcome::Failed, 0, None);
+                }
             }
             body["error"] = ApiError::from(e).with_request_id(ctx.request_id()).error_object();
             "failed"
@@ -268,7 +303,7 @@ async fn handle_webhook(state: &AppState, ctx: &mut Ctx, provider: &str, req: Re
         WebhookStatus::Pending => JobStatus::Pending,
         WebhookStatus::Succeeded(resp) => JobStatus::Succeeded(resp),
         WebhookStatus::Failed(e) => JobStatus::Failed(e),
-        WebhookStatus::Finished => retrieve_status(state, &first).await?,
+        WebhookStatus::Finished => retrieve_status(state, &first, None).await?,
     };
     let mut served: Option<Served> = None;
     let mut ids = Vec::with_capacity(jobs.len());

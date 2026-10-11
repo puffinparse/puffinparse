@@ -24,6 +24,8 @@ pub struct ErrorBody {
     pub job_id: Option<String>,
     pub request_id: Option<String>,
     pub retry_after_secs: Option<u64>,
+    /// Machine-readable specifics (`{"limit": 3}`, `{"reason": "paused"}`), when the type has any.
+    pub details: Option<serde_json::Value>,
 }
 
 impl std::ops::Deref for ApiError {
@@ -50,6 +52,7 @@ impl ApiError {
             job_id: None,
             request_id: None,
             retry_after_secs: None,
+            details: None,
         }))
     }
 
@@ -89,6 +92,16 @@ impl ApiError {
         e
     }
 
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    pub fn with_retry_after(mut self, secs: u64) -> Self {
+        self.retry_after_secs = Some(secs);
+        self
+    }
+
     pub fn with_request_id(mut self, id: &str) -> Self {
         self.request_id = Some(id.to_string());
         self
@@ -118,6 +131,7 @@ impl From<Error> for ApiError {
             job_id: e.job_id,
             request_id: None,
             retry_after_secs: None,
+            details: None,
         }))
     }
 }
@@ -126,14 +140,18 @@ impl ApiError {
     /// The inner `{type, message, provider, provider_status, job_id, request_id}` object, also
     /// used as the `error` of a failed job in `GET /v1/jobs/{id}`.
     pub fn error_object(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut v = serde_json::json!({
             "type": self.error_type,
             "message": self.message,
             "provider": self.provider,
             "provider_status": self.provider_status,
             "job_id": self.job_id,
             "request_id": self.request_id,
-        })
+        });
+        if let Some(d) = &self.details {
+            v["details"] = d.clone();
+        }
+        v
     }
 }
 

@@ -29,6 +29,9 @@ pub struct Config {
     /// `POST /v1/webhooks/{provider}`: off (404) unless enabled here.
     #[serde(default)]
     pub webhooks: WebhooksConfig,
+    /// `/v1/playground/*` for the website's playground page: off (404) unless enabled here.
+    #[serde(default)]
+    pub playground: PlaygroundConfig,
 }
 
 /// `"env:VAR"` references are names, not secrets, and are shown; literal values are not.
@@ -45,6 +48,7 @@ impl std::fmt::Debug for Config {
             .field("models", &self.models)
             .field("keys", &self.keys)
             .field("webhooks", &self.webhooks)
+            .field("playground", &self.playground)
             .finish()
     }
 }
@@ -65,6 +69,168 @@ impl std::fmt::Debug for WebhooksConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebhooksConfig").field("enabled", &self.enabled).field("secret", &redact(&self.secret)).finish()
     }
+}
+
+/// Providers the playground can run: they have a job queue, and a browser can send their key in
+/// an `x-provider-key-<provider>` header.
+pub const PLAYGROUND_PROVIDERS: &[&str] = &["reducto", "extend", "llamaparse", "opendocrouter"];
+
+/// `[playground]`: the public playground API (docs/SERVER.md, "Playground API").
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlaygroundConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Exact browser origins allowed by CORS (`https://puffinparse.com`). Required when enabled.
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+    /// Registry models offered (`provider/model`, providers in [`PLAYGROUND_PROVIDERS`]).
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// List price (USD per page, parse) at or under which a model is on the free tier.
+    #[serde(default = "default_free_max_price")]
+    pub free_tier_max_price_per_page: f64,
+    #[serde(default = "default_pg_file_mb")]
+    pub max_file_mb: usize,
+    #[serde(default = "default_pg_pages")]
+    pub max_pages: u32,
+    #[serde(default = "default_pg_models")]
+    pub max_models: usize,
+    /// Model-pages (pages x models) one signed-in user may run per UTC day on the free tier.
+    #[serde(default = "default_pg_user_pages")]
+    pub free_model_pages_per_day: u32,
+    /// Free-tier spend cap for all users together per UTC day (USD, list price). 0 = paused.
+    #[serde(default)]
+    pub free_daily_budget_usd: f64,
+    /// Runs per minute from one client IP (both tiers).
+    #[serde(default = "default_pg_ip_rpm")]
+    pub ip_rpm: u32,
+    /// Job status checks per minute for one playground user or key.
+    #[serde(default = "default_pg_poll_rpm")]
+    pub poll_rpm: u32,
+    /// Reverse proxies in front of the gateway that append to `X-Forwarded-For` (Cloud Run: 1).
+    /// 0 = use the connection's address.
+    #[serde(default)]
+    pub trust_forwarded_for: usize,
+    /// Cloudflare Turnstile secret. The free tier is unavailable without it. `env:VAR` allowed.
+    #[serde(default)]
+    pub turnstile_secret: Option<String>,
+    /// Turnstile's verification endpoint (overridable for tests).
+    #[serde(default = "default_turnstile_url")]
+    pub turnstile_verify_url: String,
+    /// Supabase project: sign-in for the free tier, and its quota counters.
+    #[serde(default)]
+    pub supabase: Option<SupabaseConfig>,
+}
+
+impl Default for PlaygroundConfig {
+    fn default() -> Self {
+        toml::from_str("").expect("defaults")
+    }
+}
+
+impl std::fmt::Debug for PlaygroundConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlaygroundConfig")
+            .field("enabled", &self.enabled)
+            .field("allowed_origins", &self.allowed_origins)
+            .field("models", &self.models)
+            .field("free_tier_max_price_per_page", &self.free_tier_max_price_per_page)
+            .field("max_file_mb", &self.max_file_mb)
+            .field("max_pages", &self.max_pages)
+            .field("max_models", &self.max_models)
+            .field("free_model_pages_per_day", &self.free_model_pages_per_day)
+            .field("free_daily_budget_usd", &self.free_daily_budget_usd)
+            .field("ip_rpm", &self.ip_rpm)
+            .field("poll_rpm", &self.poll_rpm)
+            .field("trust_forwarded_for", &self.trust_forwarded_for)
+            .field("turnstile_secret", &redact(&self.turnstile_secret))
+            .field("turnstile_verify_url", &self.turnstile_verify_url)
+            .field("supabase", &self.supabase)
+            .finish()
+    }
+}
+
+fn default_free_max_price() -> f64 {
+    0.025
+}
+fn default_pg_file_mb() -> usize {
+    4
+}
+fn default_pg_pages() -> u32 {
+    10
+}
+fn default_pg_models() -> usize {
+    3
+}
+fn default_pg_user_pages() -> u32 {
+    30
+}
+fn default_pg_ip_rpm() -> u32 {
+    20
+}
+fn default_pg_poll_rpm() -> u32 {
+    120
+}
+fn default_turnstile_url() -> String {
+    "https://challenges.cloudflare.com/turnstile/v0/siteverify".into()
+}
+
+/// `[playground.supabase]`: verifying the browser's access token, and the free-tier counters.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupabaseConfig {
+    /// `https://<project>.supabase.co`: JWKS, issuer and the counters' RPC endpoint derive from it.
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub jwks_url: Option<String>,
+    #[serde(default)]
+    pub issuer: Option<String>,
+    #[serde(default = "default_audience")]
+    pub audience: Vec<String>,
+    #[serde(default = "default_leeway")]
+    pub leeway_secs: u64,
+    #[serde(default = "default_jwks_cache")]
+    pub jwks_cache_secs: u64,
+    /// Legacy HS256 projects only. `env:VAR` allowed.
+    #[serde(default)]
+    pub jwt_secret: Option<String>,
+    /// Service-role (or `sb_secret_...`) key for the `playground_*` functions. Unset: the counters
+    /// live in this process's memory (one instance only; they reset on restart). `env:VAR` allowed.
+    #[serde(default)]
+    pub service_key: Option<String>,
+}
+
+impl Default for SupabaseConfig {
+    fn default() -> Self {
+        toml::from_str("").expect("defaults")
+    }
+}
+
+impl std::fmt::Debug for SupabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SupabaseConfig")
+            .field("url", &self.url)
+            .field("jwks_url", &self.jwks_url)
+            .field("issuer", &self.issuer)
+            .field("audience", &self.audience)
+            .field("leeway_secs", &self.leeway_secs)
+            .field("jwks_cache_secs", &self.jwks_cache_secs)
+            .field("jwt_secret", &redact(&self.jwt_secret))
+            .field("service_key", &redact(&self.service_key))
+            .finish()
+    }
+}
+
+fn default_audience() -> Vec<String> {
+    vec!["authenticated".into()]
+}
+fn default_leeway() -> u64 {
+    30
+}
+fn default_jwks_cache() -> u64 {
+    600
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -377,6 +543,67 @@ impl Config {
         if self.webhooks.enabled && !self.webhooks.secret.as_deref().is_some_and(|s| !s.trim().is_empty()) {
             return Err("webhooks.enabled requires webhooks.secret (e.g. \"env:PUFFINPARSE_WEBHOOK_SECRET\")".into());
         }
+        self.playground.validate()
+    }
+}
+
+impl PlaygroundConfig {
+    fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.allowed_origins.is_empty() {
+            return Err(
+                "playground.allowed_origins must list the site's origin(s), e.g. [\"https://puffinparse.com\"]".into(),
+            );
+        }
+        for o in &self.allowed_origins {
+            let ok =
+                (o.starts_with("https://") || o.starts_with("http://localhost") || o.starts_with("http://127.0.0.1"))
+                    && !o.ends_with('/')
+                    && !o.contains('*')
+                    && o.parse::<axum::http::HeaderValue>().is_ok();
+            if !ok {
+                return Err(format!(
+                    "playground.allowed_origins: '{o}' must be an exact https:// origin (no path, no '*')"
+                ));
+            }
+        }
+        if self.models.is_empty() {
+            return Err("playground.models must list at least one model".into());
+        }
+        for m in &self.models {
+            let r = ModelRef::parse_for(m, puffinparse_core::Mode::Parse)
+                .map_err(|e| format!("playground.models: '{m}': {}", e.message))?;
+            if !PLAYGROUND_PROVIDERS.contains(&r.provider.as_str()) {
+                return Err(format!(
+                    "playground.models: '{m}' has no job queue the playground can use (providers: {})",
+                    PLAYGROUND_PROVIDERS.join(", ")
+                ));
+            }
+        }
+        let positive = [
+            ("max_file_mb", self.max_file_mb as f64),
+            ("max_pages", f64::from(self.max_pages)),
+            ("max_models", self.max_models as f64),
+            ("ip_rpm", f64::from(self.ip_rpm)),
+            ("poll_rpm", f64::from(self.poll_rpm)),
+        ];
+        if let Some((name, _)) = positive.iter().find(|(_, v)| *v <= 0.0) {
+            return Err(format!("playground.{name} must be > 0"));
+        }
+        let non_negative = |v: f64| v.is_finite() && v >= 0.0;
+        if !non_negative(self.free_daily_budget_usd) || !non_negative(self.free_tier_max_price_per_page) {
+            return Err("playground.free_daily_budget_usd and free_tier_max_price_per_page must be >= 0".into());
+        }
+        if let Some(s) = &self.supabase {
+            if s.url.is_none() && (s.issuer.is_none() || (s.jwks_url.is_none() && s.jwt_secret.is_none())) {
+                return Err("playground.supabase needs 'url' (or 'issuer' plus 'jwks_url' / 'jwt_secret')".into());
+            }
+            if s.service_key.is_some() && s.url.is_none() {
+                return Err("playground.supabase.service_key needs playground.supabase.url".into());
+            }
+        }
         Ok(())
     }
 }
@@ -432,6 +659,13 @@ mod tests {
         let cfg = Config::from_toml(include_str!("../../../examples/server/puffinparse.toml")).unwrap();
         assert_eq!(cfg.models.len(), 3);
         assert_eq!(cfg.keys.len(), 2);
+    }
+
+    #[test]
+    fn cloud_run_playground_config_is_valid() {
+        let cfg = Config::from_toml(include_str!("../../../deploy/cloudrun/puffinparse.toml")).unwrap();
+        assert!(cfg.playground.enabled && !cfg.server.allow_direct_models);
+        assert!(cfg.server.state_file.is_none());
     }
 
     #[test]

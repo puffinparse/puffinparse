@@ -45,7 +45,29 @@ pub struct StoredJob {
     pub outcome: Option<JobOutcome>,
     /// Unix seconds of the submission (retention clock).
     pub created_unix: i64,
+    /// Set for jobs submitted through `POST /v1/playground/runs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playground: Option<PlaygroundJob>,
 }
+
+/// A playground job's accounting. Its `owner` is `playground:free:<hash>` or
+/// `playground:byok:<hash>`; neither is a virtual key, so no monthly usage is recorded for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaygroundJob {
+    /// Free tier: the Supabase user id whose daily model-pages were reserved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// Model-pages reserved at submit time (released on failure, trued up on success).
+    #[serde(default)]
+    pub reserved_pages: u32,
+    /// Free-tier spend reserved at submit time: list price x reserved pages (refunded on failure,
+    /// trued up to the job's cost on success).
+    #[serde(default)]
+    pub reserved_usd: f64,
+}
+
+/// Owners of playground jobs start with this; they are not virtual keys.
+pub const PLAYGROUND_OWNER_PREFIX: &str = "playground:";
 
 /// Terminal state of a job, recorded the first time it is observed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,6 +155,10 @@ impl UsageStore {
     fn check_rate_at(&self, key_id: &str, rpm: u32, now: Instant) -> Result<(), u64> {
         let window = Duration::from_secs(60);
         let mut inner = self.lock();
+        // Per-IP playground buckets would otherwise accumulate forever: drop idle ones.
+        if inner.windows.len() > 4096 {
+            inner.windows.retain(|_, q| q.back().is_some_and(|t| now.duration_since(*t) < window));
+        }
         let q = inner.windows.entry(key_id.to_string()).or_default();
         while q.front().is_some_and(|t| now.duration_since(*t) >= window) {
             q.pop_front();
@@ -192,7 +218,7 @@ impl UsageStore {
                 return false;
             }
             job.outcome = Some(outcome);
-            if outcome == JobOutcome::Succeeded {
+            if outcome == JobOutcome::Succeeded && !job.owner.starts_with(PLAYGROUND_OWNER_PREFIX) {
                 let owner = job.owner.clone();
                 inner.add(&owner, cost_usd, pages);
             }
@@ -263,6 +289,7 @@ mod tests {
             output_format: None,
             outcome: None,
             created_unix,
+            playground: None,
         }
     }
 

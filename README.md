@@ -652,7 +652,8 @@ PuffinParse stands on other people's work:
   [maturin](https://github.com/PyO3/maturin), [napi-rs](https://napi.rs) and the other crates in
   [THIRD_PARTY_NOTICES.md](https://github.com/ajinkyashejul/puffinparse/blob/main/THIRD_PARTY_NOTICES.md).
   The site uses GitHub's [Octicons](https://github.com/primer/octicons) GitHub mark (MIT), and the
-  results viewer uses [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0).
+  results viewer uses [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0); the playground
+  signs in with [supabase-js](https://github.com/supabase/supabase-js) (MIT) when it is configured.
 
 ## License
 

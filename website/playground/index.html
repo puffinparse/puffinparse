@@ -1,0 +1,197 @@
+<!doctype html>
+<!--
+  PuffinParse playground template.
+
+  Rendered by website/build.py (build_playground): every {{ NAME }} placeholder is filled at build
+  time. The page's settings (API origin, public Supabase and Turnstile identifiers, the hosted model
+  list from the registry, default limits) arrive as JSON in #pp-config; playground.js does the rest.
+  The browser <-> gateway contract is in docs/SERVER.md, "Playground API". Never edit website/dist.
+-->
+<html lang="en" data-base="{{BASE}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playground · PuffinParse</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="canonical" href="{{CANONICAL}}">
+<link rel="icon" href="{{FAVICON}}">
+{{SOCIAL}}
+{{ANALYTICS}}
+{{JSONLD}}
+{{API_LINKS}}
+<link rel="stylesheet" href="{{BASE}}tokens.css">
+<link rel="stylesheet" href="{{BASE}}style.css">
+<link rel="stylesheet" href="{{BASE}}playground.css">
+<script>(function(){try{var t=localStorage.getItem('puffinparse-theme');
+if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<script type="application/json" id="pp-config">{{CONFIG}}</script>
+{{THIRD_PARTY}}
+<script src="{{BASE}}playground.js" defer></script>
+</head>
+<body class="pg">
+<a class="pg-skip" href="#main">Skip to content</a>
+<header class="top"><div class="topin">
+<a class="brand" href="{{BASE}}">{{MARK}}PuffinParse</a>
+<div class="spacer"></div>
+<a class="plain" href="{{URL_DOCS}}">Docs</a>
+<a class="plain" href="{{URL_VIEWER}}">Benchmark</a>
+<a class="plain pg-here" href="{{BASE}}playground/" aria-current="page">Playground</a>
+{{GH_STAR}}
+{{THEME_BUTTON}}
+</div></header>
+
+<main id="main" class="pg-main" tabindex="-1">
+<div class="pg-intro">
+  <h1>Playground</h1>
+  <p class="pg-lede">Run a PDF or image through up to {{LIMIT_MODELS}} parsers and compare their
+    Markdown side by side, with latency and cost. Start with a sample document: its outputs come
+    from the open benchmark, so showing them is free.</p>
+</div>
+
+<noscript><p class="pg-note">The playground needs JavaScript. Without it, the
+  <a href="{{URL_VIEWER}}">benchmark viewer</a> shows every model's output on every benchmark
+  document.</p></noscript>
+
+<form id="pg-form" class="pg-form" novalidate>
+
+<section class="pg-step" aria-labelledby="pg-doc-h">
+  <h2 id="pg-doc-h"><span class="pg-num" aria-hidden="true">1</span>Document</h2>
+  <fieldset class="pg-seg">
+    <legend class="pg-sr">Document source</legend>
+    <label><input type="radio" name="source" value="sample" checked> Sample document</label>
+    <label><input type="radio" name="source" value="upload"> Your document</label>
+  </fieldset>
+
+  <div id="pg-sample-pane">
+    <fieldset class="pg-samples" id="pg-samples">
+      <legend class="pg-sr">Sample documents</legend>
+      <p class="pg-hint" id="pg-samples-loading">Loading the {{N_SAMPLES}} sample documents…</p>
+    </fieldset>
+    <p class="pg-hint">Samples come from the {{SAMPLE_RUN}} benchmark run, with the outputs each
+      model produced then. Showing them calls no provider.</p>
+  </div>
+
+  <div id="pg-upload-pane" hidden>
+    <label class="pg-drop" id="pg-drop" for="pg-file">
+      <span class="pg-drop-title">Choose a PDF, PNG or JPEG</span>
+      <span class="pg-hint">Up to {{LIMIT_MB}} MB and {{LIMIT_PAGES}} pages. You can also drop a file here.</span>
+      <input type="file" id="pg-file" accept="application/pdf,image/png,image/jpeg">
+    </label>
+    <p id="pg-file-status" class="pg-file-status" aria-live="polite"></p>
+  </div>
+</section>
+
+<section class="pg-step" aria-labelledby="pg-models-h">
+  <h2 id="pg-models-h"><span class="pg-num" aria-hidden="true">2</span>Models
+    <span class="pg-count" id="pg-model-count" aria-live="polite"></span></h2>
+  <div id="pg-models" class="pg-models"></div>
+</section>
+
+<section class="pg-step" aria-labelledby="pg-run-h">
+  <h2 id="pg-run-h"><span class="pg-num" aria-hidden="true">3</span>Run</h2>
+
+  <div id="pg-sample-run" class="pg-sample-run">
+    <p id="pg-saved-note">Shows the saved outputs. No provider is called and nothing is charged.</p>
+    <label class="pg-check" id="pg-live-sample-wrap" hidden><input type="checkbox" id="pg-live-sample">
+      Run this sample live instead</label>
+  </div>
+
+  <div id="pg-live" hidden>
+    <fieldset class="pg-seg" id="pg-mode">
+      <legend class="pg-sr">Who pays for the run</legend>
+      <label><input type="radio" name="mode" value="free" checked> Free tier</label>
+      <label><input type="radio" name="mode" value="byok"> Your API keys</label>
+    </fieldset>
+
+    <div id="pg-free" class="pg-panel">
+      <div id="pg-signed-out">
+        <p>Sign in to run documents on our keys: up to {{LIMIT_DAILY}} model-pages a day
+          (a 2-page document on 3 models is 6).</p>
+        <div class="pg-row">
+          <button type="button" class="btn" id="pg-github">Sign in with GitHub</button>
+        </div>
+        <div class="pg-email">
+          <label for="pg-email">Or get a sign-in link by email</label>
+          <div class="pg-row">
+            <input type="email" id="pg-email" autocomplete="email" placeholder="you@example.com">
+            <button type="button" class="btn" id="pg-email-send">Email me a link</button>
+          </div>
+          <div id="pg-signin-turnstile" class="pg-turnstile"></div>
+          <p id="pg-email-status" class="pg-hint" aria-live="polite"></p>
+        </div>
+      </div>
+      <div id="pg-signed-in" hidden>
+        <p class="pg-row pg-who"><span>Signed in as <strong id="pg-user"></strong></span>
+          <button type="button" class="pg-link" id="pg-signout">Sign out</button></p>
+        <p class="pg-hint" id="pg-quota" aria-live="polite"></p>
+      </div>
+      <p id="pg-free-off" class="pg-note" hidden></p>
+    </div>
+
+    <div id="pg-byok" class="pg-panel" hidden>
+      <p>Your keys go with each request to the gateway and on to the provider. They are never
+        stored or logged there, and your own provider account pays for the run.</p>
+      <div id="pg-keys" class="pg-keys"></div>
+      <label class="pg-check"><input type="checkbox" id="pg-remember"> Remember keys on this device
+        (saved in this browser only)</label>
+      <button type="button" class="pg-link" id="pg-forget" hidden>Forget saved keys</button>
+    </div>
+
+    <div id="pg-turnstile" class="pg-turnstile"></div>
+  </div>
+
+  <p id="pg-live-off" class="pg-note" hidden></p>
+
+  <details class="pg-privacy">
+    <summary>What happens to your document and keys</summary>
+    <ul>
+      <li><strong>Samples</strong> are files and outputs published with the benchmark; showing them
+        sends nothing anywhere.</li>
+      <li><strong>Your document</strong> goes to the PuffinParse gateway and from there to each
+        provider you picked, which processes it under its own terms and retention policy. The
+        gateway holds it in memory for the upload only: it is not written to disk, stored or
+        logged.</li>
+      <li><strong>Outputs</strong> are not stored by the gateway: each poll reads the result from
+        the provider, and the job handle (id, model, time, no content) expires after an hour. On
+        this page they live until you leave or run again.</li>
+      <li><strong>Your keys</strong> travel in a request header to the gateway and on to that
+        provider only. The gateway never stores or logs them. This page keeps them in memory for
+        the tab, or in this browser's local storage if you tick "Remember", and never sends them
+        anywhere else.</li>
+      <li><strong>Free tier</strong>: Supabase holds your sign-in (email or GitHub account), and we
+        count the model-pages you use per day. Nothing about the document is recorded.</li>
+    </ul>
+    <p class="pg-hint">How the gateway works: <a href="{{URL_GATEWAY}}">gateway docs</a>.
+      Found a problem? <a href="{{URL_SECURITY}}">Security policy</a>.</p>
+  </details>
+
+  <div class="pg-actions">
+    <button type="submit" class="btn primary" id="pg-run">Show outputs</button>
+    <span id="pg-estimate" class="pg-hint" aria-live="polite"></span>
+  </div>
+  <p id="pg-form-error" class="pg-error" role="alert"></p>
+</section>
+</form>
+
+<section id="pg-results" class="pg-results" aria-labelledby="pg-results-h" hidden>
+  <div class="pg-results-head">
+    <h2 id="pg-results-h">Results</h2>
+    <p id="pg-status" class="pg-hint" aria-live="polite"></p>
+    <button type="button" class="btn" id="pg-stop" hidden>Stop polling</button>
+  </div>
+  <div id="pg-docline" class="pg-docline"></div>
+  <div id="pg-grid" class="pg-grid"></div>
+</section>
+</main>
+
+<footer class="pg-footer"><div class="pg-footer-in">
+<span>PuffinParse · MIT</span>
+<span class="sep"><a href="{{REPO}}">GitHub</a></span>
+<span class="sep"><a href="{{URL_DOCS}}">Docs</a></span>
+<span class="sep"><a href="{{URL_VIEWER}}">Benchmark</a></span>
+</div></footer>
+<script src="{{BASE}}app.js" defer></script>
+<script src="{{BASE}}stars.js" defer></script>
+</body>
+</html>

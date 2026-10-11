@@ -26,14 +26,24 @@ pub(crate) fn router(state: Arc<AppState>) -> axum::Router {
     // One semaphore shared by every document route: at most `max_concurrent_requests` provider
     // calls in flight; the rest wait (bounded by the request timeout below).
     let concurrency = tower::limit::GlobalConcurrencyLimitLayer::new(state.server.max_concurrent_requests);
+    // The browser-facing routes (the playground and its job polls) answer CORS for the
+    // configured origins only, and only when the playground is on.
+    let cors = state.playground.as_ref().map(|p| p.cors());
+    let with_cors = |r: axum::routing::MethodRouter<Arc<AppState>>| match &cors {
+        Some(c) => r.layer(c.clone()),
+        None => r,
+    };
+    let pg_limit = state.playground.as_ref().map_or(limit, |p| p.body_limit());
     axum::Router::new()
         .route("/v1/parse", post(|s: State<Arc<AppState>>, r: Request| run(s, Mode::Parse, r)))
         .route("/v1/ocr", post(|s: State<Arc<AppState>>, r: Request| run(s, Mode::Ocr, r)))
         .route("/v1/extract", post(|s: State<Arc<AppState>>, r: Request| run(s, Mode::Extract, r)))
         .route("/v1/jobs", post(crate::jobs::submit))
-        .route("/v1/jobs/{id}", get(crate::jobs::retrieve))
+        .route("/v1/jobs/{id}", with_cors(get(crate::jobs::retrieve)))
         .route("/v1/webhooks/{provider}", post(crate::jobs::webhook))
+        .route("/v1/playground/runs", with_cors(post(crate::playground::run).layer(DefaultBodyLimit::max(pg_limit))))
         .route_layer(concurrency)
+        .route("/v1/playground/config", with_cors(get(crate::playground::config)))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route("/v1/models", get(models))
@@ -87,6 +97,14 @@ pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// The request carries the master key.
+pub(crate) fn is_master(state: &AppState, headers: &HeaderMap) -> bool {
+    match (state.master_key.as_deref(), bearer(headers)) {
+        (Some(m), Some(t)) => ct_eq(m.as_bytes(), t.as_bytes()),
+        _ => false,
+    }
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {

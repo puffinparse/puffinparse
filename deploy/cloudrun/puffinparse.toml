@@ -1,0 +1,49 @@
+# Gateway config for the hosted playground (docs/SERVER.md, "Playground API").
+# Mounted from Secret Manager at /etc/puffinparse/puffinparse.toml by service.yaml. Every secret is
+# an env: reference; the values come from Secret Manager too, never from this file.
+#
+# OWNER DECISIONS (pending): the public origin (api.puffinparse.com, see service.yaml), the
+# free-tier price ceiling (free_tier_max_price_per_page) and the daily budget.
+
+master_key = "env:PUFFINPARSE_MASTER_KEY"   # operator access only (metrics, usage); never shipped to browsers
+
+[server]
+host = "0.0.0.0"
+port = 8080
+log_stdout = true                 # Cloud Logging collects stdout; the log holds no keys or content
+max_body_mb = 5
+max_timeout_secs = 120
+max_retries = 1
+allow_direct_models = false       # nothing but the playground is served to non-master callers
+job_retention_hours = 24
+max_concurrent_requests = 32
+# No state_file: Cloud Run's disk is ephemeral. Jobs live in memory, so the service runs one
+# instance (service.yaml maxScale 1); free-tier counters are in Supabase.
+
+[providers.reducto]
+api_key = "env:REDUCTO_API_KEY"
+[providers.extend]
+api_key = "env:EXTEND_API_KEY"
+[providers.llamaparse]
+api_key = "env:LLAMA_API_KEY"
+
+[playground]
+enabled = true
+allowed_origins = ["https://puffinparse.com", "https://www.puffinparse.com"]
+models = ["reducto/standard", "reducto/r-1", "reducto/agentic", "extend/parse_light",
+          "extend/parse_performance", "llamaparse/fast", "llamaparse/cost_effective",
+          "llamaparse/agentic"]
+free_tier_max_price_per_page = 0.025
+max_file_mb = 4
+max_pages = 10
+max_models = 3
+free_model_pages_per_day = 30
+free_daily_budget_usd = 2.0          # hard global cap at list price (owner decision, 2026-09-25)
+ip_rpm = 20
+poll_rpm = 120
+trust_forwarded_for = 1           # Cloud Run's front end appends the client address
+turnstile_secret = "env:TURNSTILE_SECRET_KEY"
+
+[playground.supabase]
+url = "https://YOUR-PROJECT.supabase.co"
+service_key = "env:SUPABASE_SECRET_KEY"

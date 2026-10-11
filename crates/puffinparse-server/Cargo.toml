@@ -3,7 +3,8 @@ name = "puffinparse-server"
 description = "PuffinParse gateway: an HTTP proxy in front of every document-parsing provider with virtual keys, budgets, rate limits, fallbacks and metrics."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# jsonwebtoken (Supabase JWT verification) needs 1.88.
+rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
@@ -16,8 +17,8 @@ readme = "../../README.md"
 [dependencies]
 puffinparse-core = { workspace = true }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "query", "tokio"] }
-tower-http = { version = "0.6", features = ["catch-panic"] }
-tower = { version = "0.5", features = ["limit"] }
+tower-http = { version = "0.6", features = ["catch-panic", "cors"] }
+tower = { version = "0.5", features = ["limit", "util"] }
 # The accept loop in lib.rs: axum::serve does not expose hyper's header read timeout.
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service", "server", "server-graceful", "http1"] }
@@ -29,11 +30,24 @@ uuid = { workspace = true }
 bytes = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+# Supabase JWT verification (JWKS + HS256 fallback). aws-lc-rs is already in the tree via rustls.
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+# Fetching the Supabase JWKS. Already a dependency of the core; no provider logic here.
+reqwest = { workspace = true }
+futures = { workspace = true }
+# Playground: own-key job owners are an HMAC of the key; PDF object streams are inflated to count
+# pages. All three are already in the tree through the core / reqwest.
+hmac = "0.13"
+sha2 = "0.11"
+flate2 = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+aws-lc-rs = "1"
+base64 = "0.22"
 
 [lints.rust]
 unsafe_code = "forbid"
