@@ -225,7 +225,7 @@ impl std::fmt::Debug for DocumentRequest {
             .field("timeout_secs", &self.timeout_secs)
             .field("max_retries", &self.max_retries)
             .field("api_key", &redacted(&self.api_key))
-            .field("base_url", &self.base_url)
+            .field("base_url", &self.base_url.as_deref().map(redact_url))
             .field("webhook_url", &redacted(&self.webhook_url))
             .field("metadata", &keys_only(self.metadata.keys()))
             .finish()
@@ -691,9 +691,11 @@ mod tests {
         );
         r.provider_options = Some(serde_json::json!({"token": "OPT-SECRET", "mode": "fast"}));
         r.metadata.insert("auth".into(), serde_json::json!("META-SECRET"));
+        r.base_url = Some("https://gw-user:BASE-SECRET@proxy.example/v1?key=BASE-KEY-SECRET".into());
         let dbg = format!("{r:?} {r:#?} {}", r.input.describe());
         assert!(!dbg.contains("SECRET"), "{dbg}");
         assert!(dbg.contains("https://<redacted>@bucket.s3.example/a/doc.pdf?<redacted>"), "{dbg}");
+        assert!(dbg.contains("https://<redacted>@proxy.example/v1?<redacted>"), "{dbg}");
         assert!(dbg.contains("token") && dbg.contains("mode") && dbg.contains("auth"), "keys stay visible: {dbg}");
         // A plain URL is unchanged; something that does not parse is cut before any secret.
         assert_eq!(DocumentInput::Url { url: "https://a.example/b.pdf".into() }.describe(), "https://a.example/b.pdf");
