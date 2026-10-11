@@ -278,6 +278,13 @@ impl Server {
         let tx = tx.clone();
         let task_key = key.clone();
         let mut inflight = self.inflight.lock().unwrap_or_else(|p| p.into_inner());
+        // JSON-RPC ids must be unique among in-flight requests. Accepting a duplicate would replace
+        // the first call's abort handle, leaving it uncancellable while it keeps billing.
+        if inflight.contains_key(&key) {
+            let err = RpcError::new(INVALID_REQUEST, format!("Invalid Request: request id {key} is already in flight"));
+            let _ = tx.send(error_response(id, &err));
+            return;
+        }
         let handle = tokio::spawn(async move {
             tracing::info!(tool = %name, "puffinparse mcp: tools/call");
             let out = tools::call(&server.cfg, &name, &args).await;
@@ -437,10 +444,15 @@ fn secrets_from_env() -> Vec<String> {
     secrets
 }
 
+/// Replace every secret in an outgoing (already serialised) line. A secret containing a quote,
+/// backslash or control character appears JSON-escaped in the line, so that form is matched too.
 fn redact(line: &mut String, secrets: &[String]) {
     for s in secrets {
-        if line.contains(s.as_str()) {
-            *line = line.replace(s.as_str(), "[redacted]");
+        let escaped = serde_json::to_string(s).map(|q| q[1..q.len() - 1].to_string()).unwrap_or_default();
+        for form in [s.as_str(), escaped.as_str()] {
+            if !form.is_empty() && line.contains(form) {
+                *line = line.replace(form, "[redacted]");
+            }
         }
     }
 }

@@ -299,6 +299,9 @@ pub struct ServerConfig {
     pub header_read_timeout_secs: f64,
 }
 
+/// The largest accepted value for any of the server's timeouts (seconds): a week.
+const MAX_TIMEOUT_SECS: f64 = 7.0 * 24.0 * 3600.0;
+
 impl ServerConfig {
     /// The whole-request limit: `request_timeout_secs`, or `max_timeout_secs` + 60.
     pub fn request_timeout(&self) -> std::time::Duration {
@@ -511,11 +514,17 @@ impl Config {
             }
         }
         let s = &self.server;
-        if s.max_timeout_secs.is_nan() || s.max_timeout_secs <= 0.0 {
-            return Err("server.max_timeout_secs must be > 0".into());
+        // Every timeout becomes a `Duration`, which panics on inf / NaN / huge values, so each one
+        // is checked here: finite, > 0, and at most a week.
+        let in_range = |t: f64| t.is_finite() && t > 0.0 && t <= MAX_TIMEOUT_SECS;
+        if !in_range(s.max_timeout_secs) || !in_range(s.max_timeout_secs + 60.0) {
+            return Err(format!("server.max_timeout_secs must be > 0 and at most {MAX_TIMEOUT_SECS} (a week)"));
         }
         if let Some(t) = s.request_timeout_secs {
-            if t.is_nan() || t < s.max_timeout_secs {
+            if !in_range(t) {
+                return Err(format!("server.request_timeout_secs must be > 0 and at most {MAX_TIMEOUT_SECS} (a week)"));
+            }
+            if t < s.max_timeout_secs {
                 return Err(format!(
                     "server.request_timeout_secs ({t}) must be at least server.max_timeout_secs ({})",
                     s.max_timeout_secs
@@ -525,8 +534,8 @@ impl Config {
         if s.max_concurrent_requests == 0 {
             return Err("server.max_concurrent_requests must be > 0".into());
         }
-        if s.header_read_timeout_secs.is_nan() || s.header_read_timeout_secs <= 0.0 {
-            return Err("server.header_read_timeout_secs must be > 0".into());
+        if !in_range(s.header_read_timeout_secs) {
+            return Err(format!("server.header_read_timeout_secs must be > 0 and at most {MAX_TIMEOUT_SECS} (a week)"));
         }
         if s.max_download_mb == 0 {
             return Err("server.max_download_mb must be > 0".into());
@@ -681,6 +690,19 @@ mod tests {
         assert!(Config::from_toml("[server]\nmax_timeout_secs = 300\nrequest_timeout_secs = 100").is_err());
         assert!(Config::from_toml("[server]\nmax_concurrent_requests = 0").is_err());
         assert!(Config::from_toml("[server]\nrequest_timeout_secs = 900").is_ok());
+        // Values a `Duration` cannot hold are startup errors, not panics.
+        for bad in [
+            "max_timeout_secs = inf",
+            "max_timeout_secs = 1e300",
+            "request_timeout_secs = inf",
+            "request_timeout_secs = 1e300",
+            "header_read_timeout_secs = inf",
+            "header_read_timeout_secs = nan",
+            "header_read_timeout_secs = -1",
+        ] {
+            assert!(Config::from_toml(&format!("[server]\n{bad}")).is_err(), "{bad}");
+        }
+        assert!(Config::from_toml("[server]\nmax_timeout_secs = 3600\nrequest_timeout_secs = 604800").is_ok());
     }
 
     #[test]
