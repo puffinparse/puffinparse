@@ -57,6 +57,9 @@ pub struct SupabaseAuth {
 }
 
 /// `true` for a compact JWS (`header.payload.signature`, base64url header starting `eyJ`).
+/// The 401 message for a token that is malformed or fails a check the user cannot act on.
+const INVALID_TOKEN: &str = "invalid access token";
+
 pub fn looks_like_jwt(token: &str) -> bool {
     token.starts_with("eyJ") && token.split('.').count() == 3
 }
@@ -90,11 +93,14 @@ impl SupabaseAuth {
         })
     }
 
-    /// Verify `token` and return its claims. Every failure is a 401 whose message says what was
-    /// wrong (expired, wrong audience, unknown key) without echoing the token.
+    /// Verify `token` and return its claims. Every failure is a 401. Cases a user can act on
+    /// (expired, wrong audience or project, unknown key) say so; anything else is a plain
+    /// "invalid access token", with the library's detail logged at debug level only.
     pub async fn verify(&self, token: &str) -> Result<Claims, ApiError> {
-        let header = jsonwebtoken::decode_header(token)
-            .map_err(|e| ApiError::unauthorized(format!("invalid access token: {e}")))?;
+        let header = jsonwebtoken::decode_header(token).map_err(|e| {
+            tracing::debug!(error = %e, "puffinparse-server: undecodable access token header");
+            ApiError::unauthorized(INVALID_TOKEN)
+        })?;
         let key = if header.alg == Algorithm::HS256 {
             let secret = self.hs_secret.as_deref().ok_or_else(|| {
                 ApiError::unauthorized(
@@ -105,7 +111,8 @@ impl SupabaseAuth {
         } else if ASYMMETRIC.contains(&header.alg) {
             self.key_for(header.kid.as_deref(), header.alg).await?
         } else {
-            return Err(ApiError::unauthorized(format!("access token algorithm {:?} is not accepted", header.alg)));
+            tracing::debug!(alg = ?header.alg, "puffinparse-server: access token algorithm not accepted");
+            return Err(ApiError::unauthorized(INVALID_TOKEN));
         };
         let mut v = Validation::new(header.alg);
         v.set_audience(&self.audience);
@@ -119,7 +126,10 @@ impl SupabaseAuth {
                 K::InvalidAudience => "access token has the wrong audience".to_string(),
                 K::InvalidIssuer => "access token was issued by a different Supabase project".to_string(),
                 K::InvalidSignature => "access token signature is invalid".to_string(),
-                _ => format!("invalid access token: {e}"),
+                _ => {
+                    tracing::debug!(error = %e, "puffinparse-server: access token rejected");
+                    INVALID_TOKEN.to_string()
+                }
             };
             ApiError::unauthorized(why)
         })?;
@@ -140,9 +150,11 @@ impl SupabaseAuth {
         let mut cache = self.cache.lock().await;
         let fresh = cache.fetched.is_some_and(|t| t.elapsed() < self.cache_ttl);
         let known = find(&cache.keys, kid, alg).is_some();
-        // Refetch when stale, or when the kid is unknown (rotation) and we did not just try.
+        // Refetch when stale or when the kid is unknown (rotation), but at most once per
+        // MISS_REFETCH_SECS: during a JWKS outage the stale keys keep serving instead of every
+        // request queueing behind a fetch that times out.
         let may_retry = cache.last_attempt.is_none_or(|t| t.elapsed() >= Duration::from_secs(MISS_REFETCH_SECS));
-        if !fresh || (!known && may_retry) {
+        if (!fresh || !known) && may_retry {
             cache.last_attempt = Some(Instant::now());
             match self.fetch(url).await {
                 Ok(keys) => {
@@ -164,7 +176,10 @@ impl SupabaseAuth {
                 ApiError::unauthorized("access token is signed with an unknown key")
             }
         })?;
-        DecodingKey::from_jwk(jwk).map_err(|e| ApiError::unauthorized(format!("unusable signing key: {e}")))
+        DecodingKey::from_jwk(jwk).map_err(|e| {
+            tracing::warn!(error = %e, "puffinparse-server: a Supabase signing key cannot be used");
+            ApiError::unauthorized(INVALID_TOKEN)
+        })
     }
 
     async fn fetch(&self, url: &str) -> Result<Vec<(Option<String>, Jwk)>, String> {
@@ -222,5 +237,45 @@ mod tests {
         let a = SupabaseAuth::new(&cfg, None).unwrap();
         assert_eq!(a.issuer, "https://abc.supabase.co/auth/v1");
         assert_eq!(a.jwks_url.as_deref(), Some("https://abc.supabase.co/auth/v1/.well-known/jwks.json"));
+    }
+
+    #[tokio::test]
+    async fn malformed_tokens_get_a_generic_message() {
+        let cfg = SupabaseConfig { issuer: Some("x".into()), ..SupabaseConfig::default() };
+        let a = SupabaseAuth::new(&cfg, Some("s".into())).unwrap();
+        for token in ["eyJnot-json.e30.sig", "eyJhbGciOiJub25lIn0.e30.", "eyJhbGciOiJQUzI1NiJ9.e30.sig"] {
+            let e = a.verify(token).await.unwrap_err();
+            assert_eq!(e.message, INVALID_TOKEN, "{token}");
+        }
+    }
+
+    /// While the JWKS endpoint is down, a stale cache is refetched at most once per
+    /// MISS_REFETCH_SECS, not on every request.
+    #[tokio::test]
+    async fn jwks_outage_does_not_refetch_on_every_request() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        let app = axum::Router::new().route(
+            "/jwks",
+            axum::routing::get(move || {
+                h.fetch_add(1, Ordering::SeqCst);
+                async { axum::http::StatusCode::SERVICE_UNAVAILABLE }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let cfg = SupabaseConfig {
+            issuer: Some("x".into()),
+            jwks_url: Some(format!("http://{addr}/jwks")),
+            jwks_cache_secs: 0,
+            ..SupabaseConfig::default()
+        };
+        let a = SupabaseAuth::new(&cfg, None).unwrap();
+        for _ in 0..5 {
+            assert!(a.key_for(Some("k1"), Algorithm::ES256).await.is_err());
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 }
