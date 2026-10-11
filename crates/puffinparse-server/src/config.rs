@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
@@ -31,8 +31,26 @@ pub struct Config {
     pub webhooks: WebhooksConfig,
 }
 
+/// `"env:VAR"` references are names, not secrets, and are shown; literal values are not.
+pub(crate) fn redact(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(|v| if v.starts_with("env:") { v } else { "<redacted>" })
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("server", &self.server)
+            .field("master_key", &redact(&self.master_key))
+            .field("providers", &self.providers)
+            .field("models", &self.models)
+            .field("keys", &self.keys)
+            .field("webhooks", &self.webhooks)
+            .finish()
+    }
+}
+
 /// Provider webhook receiver for jobs submitted through `POST /v1/jobs`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WebhooksConfig {
     #[serde(default)]
@@ -41,6 +59,12 @@ pub struct WebhooksConfig {
     /// Required when enabled; `env:VAR` allowed.
     #[serde(default)]
     pub secret: Option<String>,
+}
+
+impl std::fmt::Debug for WebhooksConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhooksConfig").field("enabled", &self.enabled).field("secret", &redact(&self.secret)).finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +98,49 @@ pub struct ServerConfig {
     /// How long `POST /v1/jobs` handles are kept for `GET /v1/jobs/{id}` (hours).
     #[serde(default = "default_job_retention")]
     pub job_retention_hours: u64,
+    /// Start without a `master_key` or `[[keys]]` even when `host` is not a loopback address.
+    #[serde(default)]
+    pub allow_unauthenticated: bool,
+    /// Let any key call the self-hosted engines (Tesseract, Docling, PaddleOCR, vLLM) by model
+    /// name. Off: only through an alias, a key whose `models` names them, or the master key.
+    #[serde(default)]
+    pub allow_local_engines: bool,
+    /// Accept `document_url` for models that download it inside the gateway process (see
+    /// `puffinparse_core::fetch::fetches_url_in_process`). Off: those requests get 400, while
+    /// providers that fetch the URL themselves (Reducto, Extend, ...) still take URLs.
+    #[serde(default)]
+    pub fetch_document_urls: bool,
+    /// With `fetch_document_urls`: also download from private, loopback and link-local addresses.
+    /// Only for a gateway whose callers are all trusted.
+    #[serde(default)]
+    pub allow_private_document_urls: bool,
+    /// Largest document the gateway downloads for `document_url` (MiB).
+    #[serde(default = "default_max_download_mb")]
+    pub max_download_mb: u64,
+    /// Serve `GET /metrics` without a key.
+    #[serde(default)]
+    pub public_metrics: bool,
+    /// Requests processed at once on the document endpoints (`/v1/parse|ocr|extract`, jobs,
+    /// webhooks); further requests wait for a slot, within `request_timeout_secs`.
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent_requests: usize,
+    /// Hard limit on one HTTP request, waiting for a slot included (seconds). Default:
+    /// `max_timeout_secs` + 60. Must be at least `max_timeout_secs`.
+    #[serde(default)]
+    pub request_timeout_secs: Option<f64>,
+    /// Time a client has to send its request headers (seconds).
+    #[serde(default = "default_header_timeout")]
+    pub header_read_timeout_secs: f64,
+}
+
+/// The largest accepted value for any of the server's timeouts (seconds): a week.
+const MAX_TIMEOUT_SECS: f64 = 7.0 * 24.0 * 3600.0;
+
+impl ServerConfig {
+    /// The whole-request limit: `request_timeout_secs`, or `max_timeout_secs` + 60.
+    pub fn request_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(self.request_timeout_secs.unwrap_or(self.max_timeout_secs + 60.0))
+    }
 }
 
 impl Default for ServerConfig {
@@ -89,6 +156,15 @@ impl Default for ServerConfig {
             max_retries: default_retries(),
             allow_direct_models: true,
             job_retention_hours: default_job_retention(),
+            allow_unauthenticated: false,
+            allow_local_engines: false,
+            fetch_document_urls: false,
+            allow_private_document_urls: false,
+            max_download_mb: default_max_download_mb(),
+            public_metrics: false,
+            max_concurrent_requests: default_max_concurrent(),
+            request_timeout_secs: None,
+            header_read_timeout_secs: default_header_timeout(),
         }
     }
 }
@@ -115,8 +191,17 @@ fn default_timeout() -> f64 {
 fn default_retries() -> u32 {
     2
 }
+fn default_max_download_mb() -> u64 {
+    puffinparse_core::fetch::DEFAULT_MAX_DOWNLOAD_MB
+}
+fn default_max_concurrent() -> usize {
+    64
+}
+fn default_header_timeout() -> f64 {
+    30.0
+}
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     /// API key, usually `env:REDUCTO_API_KEY`. Unset → the core reads the provider's default env var.
@@ -125,6 +210,15 @@ pub struct ProviderConfig {
     /// Base URL override (self-hosted / regional endpoints, or a mock in tests).
     #[serde(default)]
     pub base_url: Option<String>,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("api_key", &redact(&self.api_key))
+            .field("base_url", &self.base_url)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,7 +236,7 @@ pub struct AliasConfig {
 }
 
 /// One deployment behind an alias: a bare model string, or a table with per-target overrides.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(untagged)]
 pub enum Target {
     Model(String),
@@ -155,6 +249,20 @@ pub enum Target {
     },
 }
 
+impl std::fmt::Debug for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Target::Model(m) => f.debug_tuple("Model").field(m).finish(),
+            Target::Detailed { model, api_key, base_url } => f
+                .debug_struct("Detailed")
+                .field("model", model)
+                .field("api_key", &redact(api_key))
+                .field("base_url", base_url)
+                .finish(),
+        }
+    }
+}
+
 impl Target {
     pub fn model(&self) -> &str {
         match self {
@@ -163,7 +271,7 @@ impl Target {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeyConfig {
     /// Stable, non-secret identifier used in logs, metrics and the state file.
@@ -180,6 +288,18 @@ pub struct KeyConfig {
     /// Requests per minute (sliding 60 s window).
     #[serde(default)]
     pub rpm: Option<u32>,
+}
+
+impl std::fmt::Debug for KeyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyConfig")
+            .field("id", &self.id)
+            .field("key", &redact(&Some(self.key.clone())))
+            .field("models", &self.models)
+            .field("monthly_budget_usd", &self.monthly_budget_usd)
+            .field("rpm", &self.rpm)
+            .finish()
+    }
 }
 
 impl Config {
@@ -227,8 +347,32 @@ impl Config {
                 return Err(format!("keys: '{}' monthly_budget_usd must be >= 0", k.id));
             }
         }
-        if self.server.max_timeout_secs.is_nan() || self.server.max_timeout_secs <= 0.0 {
-            return Err("server.max_timeout_secs must be > 0".into());
+        let s = &self.server;
+        // Every timeout becomes a `Duration`, which panics on inf / NaN / huge values, so each one
+        // is checked here: finite, > 0, and at most a week.
+        let in_range = |t: f64| t.is_finite() && t > 0.0 && t <= MAX_TIMEOUT_SECS;
+        if !in_range(s.max_timeout_secs) || !in_range(s.max_timeout_secs + 60.0) {
+            return Err(format!("server.max_timeout_secs must be > 0 and at most {MAX_TIMEOUT_SECS} (a week)"));
+        }
+        if let Some(t) = s.request_timeout_secs {
+            if !in_range(t) {
+                return Err(format!("server.request_timeout_secs must be > 0 and at most {MAX_TIMEOUT_SECS} (a week)"));
+            }
+            if t < s.max_timeout_secs {
+                return Err(format!(
+                    "server.request_timeout_secs ({t}) must be at least server.max_timeout_secs ({})",
+                    s.max_timeout_secs
+                ));
+            }
+        }
+        if s.max_concurrent_requests == 0 {
+            return Err("server.max_concurrent_requests must be > 0".into());
+        }
+        if !in_range(s.header_read_timeout_secs) {
+            return Err(format!("server.header_read_timeout_secs must be > 0 and at most {MAX_TIMEOUT_SECS} (a week)"));
+        }
+        if s.max_download_mb == 0 {
+            return Err("server.max_download_mb must be > 0".into());
         }
         if self.webhooks.enabled && !self.webhooks.secret.as_deref().is_some_and(|s| !s.trim().is_empty()) {
             return Err("webhooks.enabled requires webhooks.secret (e.g. \"env:PUFFINPARSE_WEBHOOK_SECRET\")".into());
@@ -299,6 +443,56 @@ mod tests {
         assert!(Config::from_toml("unknown = 1").is_err());
         assert!(Config::from_toml("[webhooks]\nenabled = true").is_err());
         assert!(Config::from_toml("[webhooks]\nenabled = true\nsecret = 'env:X'").is_ok());
+    }
+
+    #[test]
+    fn new_server_settings_default_to_safe_values() {
+        let s = Config::from_toml("").unwrap().server;
+        assert!(!s.allow_unauthenticated && !s.allow_local_engines && !s.fetch_document_urls);
+        assert!(!s.allow_private_document_urls && !s.public_metrics);
+        assert_eq!(s.max_download_mb, 50);
+        assert_eq!(s.max_concurrent_requests, 64);
+        assert_eq!(s.request_timeout(), std::time::Duration::from_secs(360));
+        assert!(Config::from_toml("[server]\nmax_timeout_secs = 300\nrequest_timeout_secs = 100").is_err());
+        assert!(Config::from_toml("[server]\nmax_concurrent_requests = 0").is_err());
+        assert!(Config::from_toml("[server]\nrequest_timeout_secs = 900").is_ok());
+        // Values a `Duration` cannot hold are startup errors, not panics.
+        for bad in [
+            "max_timeout_secs = inf",
+            "max_timeout_secs = 1e300",
+            "request_timeout_secs = inf",
+            "request_timeout_secs = 1e300",
+            "header_read_timeout_secs = inf",
+            "header_read_timeout_secs = nan",
+            "header_read_timeout_secs = -1",
+        ] {
+            assert!(Config::from_toml(&format!("[server]\n{bad}")).is_err(), "{bad}");
+        }
+        assert!(Config::from_toml("[server]\nmax_timeout_secs = 3600\nrequest_timeout_secs = 604800").is_ok());
+    }
+
+    #[test]
+    fn config_debug_hides_literal_secrets() {
+        let cfg = Config::from_toml(
+            r#"
+            master_key = "sk-master-LITERAL"
+            [providers.reducto]
+            api_key = "rd-LITERAL"
+            [[models]]
+            name = "a"
+            targets = [{ model = "reducto/standard", api_key = "tgt-LITERAL" }]
+            [[keys]]
+            id = "team"
+            key = "sk-team-LITERAL"
+            [webhooks]
+            enabled = true
+            secret = "hook-LITERAL"
+            "#,
+        )
+        .unwrap();
+        let dbg = format!("{cfg:?} {cfg:#?}");
+        assert!(!dbg.contains("LITERAL"), "{dbg}");
+        assert!(format!("{:?}", Config::from_toml("master_key = 'env:PP_MASTER'").unwrap()).contains("env:PP_MASTER"));
     }
 
     #[test]

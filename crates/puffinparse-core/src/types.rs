@@ -47,9 +47,38 @@ impl DocumentInput {
         match self {
             DocumentInput::Path { path } => path.display().to_string(),
             DocumentInput::Bytes { data, filename } => format!("{filename} ({} bytes)", data.len()),
-            DocumentInput::Url { url } => url.clone(),
+            DocumentInput::Url { url } => redact_url(url),
         }
     }
+}
+
+/// A URL safe to log: credentials, the query string and the fragment are dropped (presigned
+/// links carry their signature there), with a marker when something was removed.
+fn redact_url(raw: &str) -> String {
+    let Ok(mut url) = url::Url::parse(raw) else {
+        // Not a URL we can take apart: keep the part before any query, fragment or `@`.
+        let cut = raw.find(['?', '#', '@']).unwrap_or(raw.len());
+        return if cut < raw.len() { format!("{}<redacted>", &raw[..cut]) } else { raw.to_string() };
+    };
+    let had_secret = !url.username().is_empty() || url.password().is_some();
+    let had_query = url.query().is_some() || url.fragment().is_some();
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    let mut out = url.to_string();
+    if had_secret {
+        out = out.replacen("://", "://<redacted>@", 1);
+    }
+    if had_query {
+        out.push_str("?<redacted>");
+    }
+    out
+}
+
+/// Free-form maps in `Debug` output: the keys only, since a value may be a token.
+fn keys_only<'a>(keys: impl Iterator<Item = &'a String>) -> BTreeMap<&'a str, &'static str> {
+    keys.map(|k| (k.as_str(), "<redacted>")).collect()
 }
 
 mod base64_bytes {
@@ -121,7 +150,10 @@ pub enum OutputFormat {
 }
 
 /// A unified OCR request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` is written by hand: it never prints `api_key` or `webhook_url` (which can carry a
+/// shared secret such as a gateway `?token=`), and shows document bytes as their length only.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DocumentRequest {
     pub input: DocumentInput,
     /// `"<provider>/<model>"`, e.g. `"reducto/standard"`. `"reducto"` selects the default model.
@@ -170,6 +202,34 @@ pub struct DocumentRequest {
     /// Free-form metadata echoed back in the response.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, serde_json::Value>,
+}
+
+impl std::fmt::Debug for DocumentRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redacted = |v: &Option<String>| v.as_ref().map(|_| "<redacted>");
+        f.debug_struct("DocumentRequest")
+            .field("input", &self.input.describe())
+            .field("model", &self.model)
+            .field("pages", &self.pages)
+            .field("language", &self.language)
+            .field("output", &self.output)
+            .field("output_format", &self.output_format)
+            .field(
+                "provider_options",
+                &self.provider_options.as_ref().map(|v| match v {
+                    serde_json::Value::Object(m) => format!("{:?}", keys_only(m.keys())),
+                    _ => "<redacted>".to_string(),
+                }),
+            )
+            .field("include_raw", &self.include_raw)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("max_retries", &self.max_retries)
+            .field("api_key", &redacted(&self.api_key))
+            .field("base_url", &self.base_url.as_deref().map(redact_url))
+            .field("webhook_url", &redacted(&self.webhook_url))
+            .field("metadata", &keys_only(self.metadata.keys()))
+            .finish()
+    }
 }
 
 fn default_timeout() -> f64 {
@@ -610,6 +670,39 @@ pub fn markdown_to_text(md: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_never_prints_secrets() {
+        let mut r = DocumentRequest::from_bytes(bytes::Bytes::from_static(b"%PDF-1.4 body"), "a.pdf")
+            .api_key("sk-live-SECRET-123");
+        r.webhook_url = Some("https://gw.example/v1/webhooks/reducto?token=HOOK-SECRET".into());
+        let dbg = format!("{r:?} {r:#?}");
+        assert!(!dbg.contains("SECRET"), "{dbg}");
+        assert!(!dbg.contains("PDF-1.4 body"), "{dbg}");
+        assert!(dbg.contains("<redacted>") && dbg.contains("a.pdf (13 bytes)"), "{dbg}");
+        let x = ExtractRequest::new(r, serde_json::json!({"type": "object"}));
+        assert!(!format!("{x:?}").contains("SECRET"));
+    }
+
+    #[test]
+    fn debug_and_describe_hide_url_secrets_and_free_form_values() {
+        let mut r = DocumentRequest::from_str_input(
+            "https://user:PASS-SECRET@bucket.s3.example/a/doc.pdf?X-Amz-Signature=SIG-SECRET#frag-SECRET",
+        );
+        r.provider_options = Some(serde_json::json!({"token": "OPT-SECRET", "mode": "fast"}));
+        r.metadata.insert("auth".into(), serde_json::json!("META-SECRET"));
+        r.base_url = Some("https://gw-user:BASE-SECRET@proxy.example/v1?key=BASE-KEY-SECRET".into());
+        let dbg = format!("{r:?} {r:#?} {}", r.input.describe());
+        assert!(!dbg.contains("SECRET"), "{dbg}");
+        assert!(dbg.contains("https://<redacted>@bucket.s3.example/a/doc.pdf?<redacted>"), "{dbg}");
+        assert!(dbg.contains("https://<redacted>@proxy.example/v1?<redacted>"), "{dbg}");
+        assert!(dbg.contains("token") && dbg.contains("mode") && dbg.contains("auth"), "keys stay visible: {dbg}");
+        // A plain URL is unchanged; something that does not parse is cut before any secret.
+        assert_eq!(DocumentInput::Url { url: "https://a.example/b.pdf".into() }.describe(), "https://a.example/b.pdf");
+        assert_eq!(DocumentInput::Url { url: "not a url?k=SECRET".into() }.describe(), "not a url<redacted>");
+        let r = DocumentRequest { provider_options: Some(serde_json::json!("RAW-SECRET")), ..r };
+        assert!(!format!("{r:?}").contains("SECRET"));
+    }
 
     #[test]
     fn input_filename_and_mime() {

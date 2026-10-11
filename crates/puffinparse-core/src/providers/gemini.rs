@@ -187,33 +187,10 @@ impl Call {
 
     /// Gemini cannot fetch URLs itself, so PuffinParse downloads the bytes and inlines them.
     async fn download(&self, url: &str, input: &DocumentInput) -> Result<(bytes::Bytes, String)> {
-        let client = http::client();
-        let (data, header_mime) = http::with_retry(NAME, self.retry, &self.deadline, || {
-            let rb = client.get(url).timeout(self.deadline.request_timeout());
-            async move {
-                let resp = rb.send().await?;
-                let status = resp.status();
-                let ct = resp
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|v| v.split(';').next().unwrap_or(v).trim().to_string());
-                let body = resp.bytes().await?;
-                if !status.is_success() {
-                    let text = String::from_utf8_lossy(&body);
-                    return Err(Error::from_http(NAME, status.as_u16(), &http::snippet(&text)));
-                }
-                Ok((body, ct))
-            }
-        })
-        .await?;
-        if data.is_empty() {
-            return Err(Error::input(format!("gemini: {url} returned an empty body")));
-        }
-        let mime = header_mime
-            .filter(|m| !m.is_empty() && m != "application/octet-stream" && m != "binary/octet-stream")
-            .unwrap_or_else(|| input.mime_type());
-        Ok((data, mime))
+        // Address-filtered, size-capped, and the response body never reaches an error message.
+        let fetched = crate::fetch::fetch_document(NAME, url, &self.deadline, self.retry).await?;
+        let mime = fetched.mime_or(input.mime_type());
+        Ok((fetched.data, mime))
     }
 
     /// Resumable Files API upload: `start` → `upload, finalize` → wait for `ACTIVE`.

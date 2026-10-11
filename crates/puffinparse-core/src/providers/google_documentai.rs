@@ -240,24 +240,7 @@ fn build_body(request: &DocumentRequest, model: &str, data: &bytes::Bytes) -> Re
 
 /// Fetch a URL input so it can be sent as `rawDocument`.
 async fn download(url: &str, deadline: &Deadline, retry: Retry) -> Result<bytes::Bytes> {
-    url::Url::parse(url).map_err(|e| Error::input(format!("invalid URL {url}: {e}")))?;
-    http::with_retry(NAME, retry, deadline, || {
-        let rb = http::client().get(url).timeout(deadline.request_timeout());
-        async move {
-            let resp = rb.send().await?;
-            let status = resp.status();
-            let body = resp.bytes().await?;
-            if status.is_success() {
-                Ok(body)
-            } else {
-                let e = Error::from_http(NAME, status.as_u16(), &String::from_utf8_lossy(&body));
-                Err(Error::new(e.kind, format!("failed to download input URL: {}", e.message))
-                    .with_provider(NAME)
-                    .with_status(status.as_u16()))
-            }
-        }
-    })
-    .await
+    Ok(crate::fetch::fetch_document(NAME, url, deadline, retry).await?.data)
 }
 
 /// Standard base64 with padding (RFC 4648 §4) — `rawDocument.content` is a base64 string.

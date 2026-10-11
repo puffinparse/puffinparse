@@ -53,6 +53,7 @@ async fn handle_submit(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<
     api::check_limits(state, &who)?;
 
     let mut doc = api::build_doc(state, &mut body)?;
+    api::check_document_url(state, &doc, Mode::Parse, std::slice::from_ref(&deployment))?;
     let output_format = body.output_format.take();
     api::output_shape(output_format.as_deref())?;
     doc.webhook_url = body.webhook_url.take();

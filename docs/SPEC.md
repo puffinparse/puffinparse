@@ -202,7 +202,14 @@ Input handling (`DocumentInput`) is identical in all three modes:
 - **Path** → read bytes, sniff MIME from extension (`mime_guess`), upload.
 - **Bytes** → require `filename` (used for MIME + provider upload).
 - **URL** (`http(s)://`) → passed to the provider as a remote URL when the
-  provider supports it (all three do); otherwise downloaded and uploaded.
+  provider supports it (all three do); otherwise downloaded and uploaded. Which providers download
+  in-process is `fetch::fetches_url_in_process(provider, mode)`; the download itself is
+  `fetch::fetch_document`: http(s) only, public addresses only (the resolved address is checked and
+  pinned, redirects re-checked, at most 5), at most 50 MiB (`PUFFINPARSE_MAX_DOWNLOAD_MB`), within
+  the request deadline, and error messages never include the response body.
+  `PUFFINPARSE_ALLOW_PRIVATE_URLS=1` (process-wide, never per request) lifts the address check for
+  trusted setups; an embedding application may fix the policy with `fetch::set_process_policy`.
+  The self-hosted engines' servers (docling-serve, PaddleOCR serving) are never handed a URL.
 
 Supported document types are whatever the provider accepts; PuffinParse does not
 pre-validate beyond a non-empty body.
@@ -755,6 +762,14 @@ not hold provider keys. Operator reference: [`SERVER.md`](SERVER.md). Contract:
   semantics and per-target credential overrides), `[[keys]]` virtual keys (`id`, `key`, `models`
   allow-list with `provider/*` wildcards, `monthly_budget_usd`, `rpm`). Secrets may be
   `env:VAR`. No master key and no keys means auth is off.
+- **Hardening.** Defaults are safe for untrusted callers: no start on a non-loopback host without
+  keys (`allow_unauthenticated`); `document_url` for a model that downloads in-process
+  (`fetch::fetches_url_in_process`) is a 400 unless `fetch_document_urls`, and such downloads use
+  the §4.4 restrictions (`allow_private_document_urls`, `max_download_mb`); self-hosted engines
+  named directly need an alias, a key whose `models` names them, the master key, or
+  `allow_local_engines`; `/metrics` needs a key unless `public_metrics`; at most
+  `max_concurrent_requests` document requests in flight, `request_timeout_secs` (default
+  `max_timeout_secs` + 60) per request, `header_read_timeout_secs` for headers.
 - **Accounting.** Spend = response `cost_usd`, per key per UTC calendar month, checked before each
   call (`402` once spent ≥ budget); `rpm` is a sliding 60 s window (`429` + `Retry-After`). State
   is in memory, optionally persisted to a JSON `state_file`.

@@ -15,7 +15,8 @@
 //!   default: layout detection + the 0.9B VLM). Same request and `layoutParsingResults` shape as
 //!   PP-StructureV3, so the same normaliser applies.
 //!
-//! All take `{"file": <base64 or URL>, "fileType": 0 (PDF) | 1 (image)}` and answer
+//! All take `{"file": <base64>, "fileType": 0 (PDF) | 1 (image)}` (URL inputs are downloaded first,
+//! through `crate::fetch`) and answer
 //! `{logId, errorCode, errorMsg, result: {..., dataInfo}}`; `dataInfo` gives each page's pixel
 //! size in the same space as the boxes. `provider_options` are merged into the request body
 //! (e.g. `useDocOrientationClassify`, `textRecScoreThresh`). No API key.
@@ -30,8 +31,8 @@ use crate::provider::{self, Provider};
 use crate::providers::local::{self, FileKind};
 use crate::providers::unstructured::{html_table_to_markdown, html_to_text};
 use crate::types::{
-    BBox, Block, BlockType, DocumentInput, DocumentRequest, Line, OutputFormat, Page, ParseResponse, TextPage,
-    TextResponse, Usage, Word,
+    BBox, Block, BlockType, DocumentRequest, Line, OutputFormat, Page, ParseResponse, TextPage, TextResponse, Usage,
+    Word,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -146,35 +147,21 @@ fn check_envelope(status: u16, body: &str) -> Result<Value> {
 }
 
 async fn request_body(request: &DocumentRequest, deadline: &Deadline) -> Result<Value> {
-    let (file, file_type) = match &request.input {
-        DocumentInput::Url { url } => {
-            // The server fetches URLs itself; the type is inferred from the extension when omitted.
-            let t = match local::sniff(&[], &request.input.filename()) {
-                FileKind::Pdf => json!(0),
-                FileKind::Image => json!(1),
-                FileKind::Other => Value::Null,
-            };
-            (url.clone(), t)
-        }
-        _ => {
-            let data = local::load_or_download(NAME, request, deadline).await?;
-            let t = match local::sniff(&data, &request.input.filename()) {
-                FileKind::Pdf => 0,
-                FileKind::Image => 1,
-                FileKind::Other => {
-                    return Err(Error::input(format!(
-                        "paddleocr reads images and PDFs only; '{}' is neither",
-                        request.input.filename()
-                    )))
-                }
-            };
-            (local::base64_encode(&data), json!(t))
+    // URL inputs are downloaded here (address-filtered, see `crate::fetch`) rather than handed to
+    // the serving endpoint: that server sits on the operator's network, and letting it fetch a
+    // caller's URL would be a server-side request from inside it.
+    let data = local::load_or_download(NAME, request, deadline).await?;
+    let file_type = match local::sniff(&data, &request.input.filename()) {
+        FileKind::Pdf => 0,
+        FileKind::Image => 1,
+        FileKind::Other => {
+            return Err(Error::input(format!(
+                "paddleocr reads images and PDFs only; '{}' is neither",
+                request.input.filename()
+            )))
         }
     };
-    let mut body = json!({"file": file, "visualize": false});
-    if !file_type.is_null() {
-        body["fileType"] = file_type;
-    }
+    let mut body = json!({"file": local::base64_encode(&data), "fileType": file_type, "visualize": false});
     if let Some(extra) = &request.provider_options {
         if !extra.is_object() {
             return Err(Error::input("paddleocr: provider_options must be an object (request body fields)"));
@@ -553,11 +540,9 @@ mod tests {
         assert_eq!(b["file"], "JVBERi0xLjQ=");
         assert_eq!(b["visualize"], false);
         assert_eq!(b["useDocUnwarping"], false);
-        let b = request_body(&DocumentRequest::from_url("https://x.test/scan.png"), &dl).await.unwrap();
-        assert_eq!(b["fileType"], 1);
-        assert_eq!(b["file"], "https://x.test/scan.png");
-        let b = request_body(&DocumentRequest::from_url("https://x.test/doc"), &dl).await.unwrap();
-        assert!(b.get("fileType").is_none());
+        // URLs are fetched in-process through the filtered path, never forwarded to the server.
+        let e = request_body(&DocumentRequest::from_url("http://127.0.0.1/scan.png"), &dl).await.unwrap_err();
+        assert_eq!(e.kind, crate::error::ErrorKind::Input, "{e}");
         assert!(request_body(&DocumentRequest::from_bytes(&b"PK\x03\x04"[..], "a.docx"), &dl).await.is_err());
     }
 

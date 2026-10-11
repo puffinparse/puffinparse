@@ -15,8 +15,8 @@
 //! The vendor modules keep only what differs: endpoints, auth headers, how the document part is
 //! shaped, how structured output is requested, and how the answer is dug out of the response.
 
-use crate::error::{Error, Result};
-use crate::http::{self, Deadline, Retry};
+use crate::error::Result;
+use crate::http::{Deadline, Retry};
 use crate::provider;
 use crate::types::{
     Block, BlockType, DocumentInput, DocumentRequest, ExtractRequest, ExtractResponse, OutputFormat, Page,
@@ -105,8 +105,9 @@ pub(crate) fn strip_code_fence(s: &str) -> &str {
 
 // ---- document loading ----------------------------------------------------------------------------
 
-/// Read the document bytes and decide its MIME type. URLs are downloaded and inlined — the
-/// vision APIs do not fetch a URL that needs the caller's credentials.
+/// Read the document bytes and decide its MIME type. URLs are downloaded (through the
+/// address-filtered [`crate::fetch`] path) and inlined — the vision APIs do not fetch a URL that
+/// needs the caller's credentials.
 pub(crate) async fn load_document(
     request: &DocumentRequest,
     deadline: &Deadline,
@@ -119,34 +120,9 @@ pub(crate) async fn load_document(
     let DocumentInput::Url { url } = &request.input else {
         unreachable!("load_bytes only returns None for URL inputs");
     };
-    let url = url.clone();
-    let client = http::client();
-    let (data, content_type) = http::with_retry(provider_name, retry, deadline, || {
-        let rb = client.get(&url).timeout(deadline.request_timeout());
-        let url = url.clone();
-        async move {
-            let resp = rb.send().await?;
-            let status = resp.status();
-            if !status.is_success() {
-                return Err(Error::input(format!("cannot download {url}: HTTP {}", status.as_u16())));
-            }
-            let content_type = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.split(';').next().unwrap_or(v).trim().to_ascii_lowercase());
-            Ok((resp.bytes().await?, content_type))
-        }
-    })
-    .await?;
-    if data.is_empty() {
-        return Err(Error::input(format!("{url} returned an empty body")).with_provider(provider_name));
-    }
-    // The URL's own extension is more reliable than a generic `application/octet-stream`.
-    let mime = match content_type {
-        Some(ct) if ct != "application/octet-stream" && ct != "binary/octet-stream" => ct,
-        _ => request.input.mime_type(),
-    };
+    let fetched = crate::fetch::fetch_document(provider_name, url, deadline, retry).await?;
+    let mime = fetched.mime_or(request.input.mime_type());
+    let data = fetched.data;
     Ok((data, mime))
 }
 

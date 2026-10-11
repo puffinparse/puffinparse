@@ -92,6 +92,13 @@ async fn mock() -> (String, Arc<Mock>) {
             }),
         )
         .route(
+            "/slow/v1/ocr",
+            post(|| async {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                ([(header::CONTENT_TYPE, "application/json")], FIXTURE)
+            }),
+        )
+        .route(
             "/fail/v1/ocr",
             post(move || async move {
                 b.fail_hits.fetch_add(1, Ordering::SeqCst);
@@ -284,7 +291,7 @@ async fn alias_falls_back_on_provider_error() {
     assert_eq!(m.fail_hits.load(Ordering::SeqCst), 1);
     assert_eq!(m.ok_hits.load(Ordering::SeqCst), 1);
 
-    let metrics = send(&app, Request::get("/metrics").body(Body::empty()).unwrap()).await.3;
+    let metrics = send(&app, get_as("/metrics", "sk-master")).await.3;
     assert!(metrics.contains("puffinparse_fallbacks_total 1"), "{metrics}");
 }
 
@@ -431,8 +438,12 @@ async fn metrics_count_requests_errors_pages_and_cost() {
     let (app, _) = app().await;
     send(&app, post_json("/v1/parse", Some("sk-master"), doc("mistral"))).await;
     send(&app, post_json("/v1/parse", None, doc("mistral"))).await;
-    let (s, h, _, text) = send(&app, Request::get("/metrics").body(Body::empty()).unwrap()).await;
+    let (s, h, _, text) = send(&app, get_as("/metrics", "sk-master")).await;
     assert_eq!(s, StatusCode::OK);
+    // Behind auth by default (any gateway key); `server.public_metrics = true` opens it.
+    let (s, _, _, _) = send(&app, Request::get("/metrics").body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(send(&app, get_as("/metrics", "sk-narrow")).await.0, StatusCode::OK);
     assert!(h[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/plain"));
     assert!(
         text.contains(r#"puffinparse_requests_total{mode="parse",model="mistral/ocr-latest",status="200"} 1"#),
@@ -603,7 +614,7 @@ async fn job_is_submitted_polled_and_charged_once() {
     // Every provider call used the [providers.reducto] key.
     assert!(m.job_auth.lock().unwrap().iter().all(|a| a == "Bearer reducto-provider-key"));
 
-    let metrics = send(&app, Request::get("/metrics").body(Body::empty()).unwrap()).await.3;
+    let metrics = send(&app, get_as("/metrics", "sk-master")).await.3;
     assert!(metrics.contains(r#"puffinparse_jobs_total{event="submitted"} 1"#), "{metrics}");
     assert!(metrics.contains(r#"puffinparse_jobs_total{event="succeeded"} 1"#), "{metrics}");
     assert!(
@@ -636,7 +647,7 @@ async fn job_through_an_alias_uses_its_first_target_and_reports_failure() {
     // The alias target's own credentials, at submit and at retrieve.
     assert!(m.job_auth.lock().unwrap().iter().all(|a| a == "Bearer reducto-alias-key"));
     assert_eq!(usage_of(&app, "sk-jobber").await["requests"], 0, "failed jobs are not charged");
-    let metrics = send(&app, Request::get("/metrics").body(Body::empty()).unwrap()).await.3;
+    let metrics = send(&app, get_as("/metrics", "sk-master")).await.3;
     assert!(metrics.contains(r#"puffinparse_jobs_total{event="failed"} 1"#), "{metrics}");
 }
 
@@ -774,4 +785,162 @@ async fn jobs_survive_a_restart_with_a_state_file() {
     assert_eq!(send(&restarted, get_as(&path, "sk-jobber")).await.2["status"], "pending");
     assert_eq!(send(&restarted, get_as(&path, "sk-team-a")).await.0, StatusCode::NOT_FOUND);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn public_metrics_opens_the_endpoint() {
+    let cfg = Config::from_toml("master_key = 'sk-m'\n[server]\npublic_metrics = true").unwrap();
+    let app = puffinparse_server::app(Arc::new(AppState::from_config_quiet(cfg).unwrap()));
+    let (s, _, _, _) = send(&app, Request::get("/metrics").body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+fn url_doc(model: &str, url: &str) -> Value {
+    json!({ "model": model, "document_url": url })
+}
+
+#[tokio::test]
+async fn document_url_is_refused_for_models_that_would_download_it_in_the_gateway() {
+    let (base, m) = mock().await;
+    let toml = |fetch: bool| {
+        format!(
+            "master_key = 'sk-m'\n[server]\nmax_retries = 0\nfetch_document_urls = {fetch}\n\
+             [providers.mistral]\napi_key = 'k'\nbase_url = '{base}/ok'\n\
+             [providers.openai]\napi_key = 'k'\nbase_url = '{base}/fail'\n\
+             [providers.gemini]\napi_key = 'k'\nbase_url = '{base}/fail'\n\
+             [[models]]\nname = 'mixed'\ntargets = ['mistral/ocr-latest', 'gemini']"
+        )
+    };
+    let app = puffinparse_server::app(Arc::new(
+        AppState::from_config_quiet(Config::from_toml(&toml(false)).unwrap()).unwrap(),
+    ));
+    let url = "https://docs.example.com/invoice.png";
+    // Mistral fetches URLs itself: passed through.
+    let (s, _, _, text) = send(&app, post_json("/v1/ocr", Some("sk-m"), url_doc("mistral", url))).await;
+    assert_eq!(s, StatusCode::OK, "{text}");
+    assert_eq!(m.ok_hits.load(Ordering::SeqCst), 1);
+    // OpenAI / Gemini would download it in the gateway: refused with the reason, before any call.
+    for model in ["openai", "gemini", "mixed"] {
+        let (s, _, body, _) = send(&app, post_json("/v1/parse", Some("sk-m"), url_doc(model, url))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{model}: {body}");
+        assert!(body["error"]["message"].as_str().unwrap().contains("fetch_document_urls"), "{body}");
+    }
+    // Also when only a request-level fallback would download.
+    let mut req = url_doc("mistral", url);
+    req["fallbacks"] = json!(["openai"]);
+    let (s, _, _, _) = send(&app, post_json("/v1/ocr", Some("sk-m"), req)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(m.fail_hits.load(Ordering::SeqCst), 0);
+    // Uploads are unaffected.
+    let (s, _, _, _) = send(&app, post_json("/v1/ocr", Some("sk-m"), doc("mistral"))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // fetch_document_urls = true: allowed, but the download itself refuses private addresses.
+    let app = puffinparse_server::app(Arc::new(
+        AppState::from_config_quiet(Config::from_toml(&toml(true)).unwrap()).unwrap(),
+    ));
+    for url in ["http://127.0.0.1:9/a.png", "http://169.254.169.254/latest/meta-data/", "http://[::1]/a.png"] {
+        let (s, _, body, _) = send(&app, post_json("/v1/parse", Some("sk-m"), url_doc("openai", url))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{url}: {body}");
+        assert!(body["error"]["message"].as_str().unwrap().contains("non-public"), "{body}");
+    }
+    assert_eq!(m.fail_hits.load(Ordering::SeqCst), 0, "the provider was never called");
+}
+
+#[tokio::test]
+async fn local_engines_need_an_explicit_grant() {
+    let (base, _) = mock().await;
+    let toml = |allow: bool| {
+        format!(
+            "master_key = 'sk-m'\n[server]\nmax_retries = 0\nallow_local_engines = {allow}\n\
+             [providers.docling]\nbase_url = '{base}/fail'\n\
+             [[models]]\nname = 'layout'\ntargets = ['docling']\n\
+             [[keys]]\nid = 'all'\nkey = 'sk-all'\n\
+             [[keys]]\nid = 'star'\nkey = 'sk-star'\nmodels = ['*']\n\
+             [[keys]]\nid = 'named'\nkey = 'sk-named'\nmodels = ['docling/*']\n\
+             [[keys]]\nid = 'alias'\nkey = 'sk-alias'\nmodels = ['layout']"
+        )
+    };
+    let app = puffinparse_server::app(Arc::new(
+        AppState::from_config_quiet(Config::from_toml(&toml(false)).unwrap()).unwrap(),
+    ));
+    for key in ["sk-all", "sk-star"] {
+        let (s, _, body, _) = send(&app, post_json("/v1/parse", Some(key), doc("docling"))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{key}: {body}");
+        assert!(body["error"]["message"].as_str().unwrap().contains("allow_local_engines"), "{body}");
+        let mut fb = doc("reducto");
+        fb["fallbacks"] = json!(["docling/default"]);
+        assert_eq!(send(&app, post_json("/v1/parse", Some(key), fb)).await.0, StatusCode::FORBIDDEN);
+        // ...and /v1/models does not offer it.
+        let models = send(&app, get_as("/v1/models", key)).await.2;
+        assert!(!models.to_string().contains("docling/default"), "{models}");
+    }
+    // Named by the key, behind an alias, or the master key: allowed (the mock then fails the call).
+    for (key, model) in [("sk-named", "docling"), ("sk-alias", "layout"), ("sk-m", "docling")] {
+        let (s, _, body, _) = send(&app, post_json("/v1/parse", Some(key), doc(model))).await;
+        assert_ne!(s, StatusCode::FORBIDDEN, "{key} {model}: {body}");
+    }
+    let app = puffinparse_server::app(Arc::new(
+        AppState::from_config_quiet(Config::from_toml(&toml(true)).unwrap()).unwrap(),
+    ));
+    let (s, _, body, _) = send(&app, post_json("/v1/parse", Some("sk-all"), doc("docling"))).await;
+    assert_ne!(s, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[test]
+fn refuses_an_open_gateway_on_a_public_address() {
+    let state = |toml: &str| AppState::from_config_quiet(Config::from_toml(toml).unwrap()).unwrap();
+    let err = state("[server]\nhost = '0.0.0.0'").check_exposure().unwrap_err();
+    assert!(err.contains("allow_unauthenticated") && err.contains("master_key"), "{err}");
+    assert!(state("[server]\nhost = '0.0.0.0'\nallow_unauthenticated = true").check_exposure().is_ok());
+    assert!(state("master_key = 'sk'\n[server]\nhost = '0.0.0.0'").check_exposure().is_ok());
+    assert!(state("[[keys]]\nid = 'a'\nkey = 'k'\n[server]\nhost = '10.0.0.5'").check_exposure().is_ok());
+    for host in ["127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.2"] {
+        assert!(state(&format!("[server]\nhost = '{host}'")).check_exposure().is_ok(), "{host}");
+    }
+    assert!(state("[server]\nhost = 'gateway.internal'").check_exposure().is_err());
+}
+
+#[test]
+fn debug_output_never_contains_secrets() {
+    std::env::set_var("PUFFINPARSE_TEST_DEBUG_KEY", "env-resolved-SECRET");
+    let cfg = Config::from_toml(
+        "master_key = 'master-SECRET'\n\
+         [providers.reducto]\napi_key = 'provider-SECRET'\n\
+         [providers.mistral]\napi_key = 'env:PUFFINPARSE_TEST_DEBUG_KEY'\n\
+         [[models]]\nname = 'a'\ntargets = [{ model = 'reducto/standard', api_key = 'target-SECRET' }]\n\
+         [[keys]]\nid = 'team'\nkey = 'vkey-SECRET'\n\
+         [webhooks]\nenabled = true\nsecret = 'hook-SECRET'",
+    )
+    .unwrap();
+    assert!(!format!("{cfg:?}").contains("SECRET"));
+    let state = AppState::from_config_quiet(cfg).unwrap();
+    let dbg = format!("{state:?} {state:#?}");
+    assert!(!dbg.contains("SECRET"), "{dbg}");
+    assert!(dbg.contains("team") && dbg.contains("reducto/standard"), "{dbg}");
+}
+
+#[tokio::test]
+async fn request_timeout_and_concurrency_limit() {
+    let (base, _) = mock().await;
+    let cfg = Config::from_toml(&format!(
+        "master_key = 'sk-m'\n[server]\nmax_retries = 0\nmax_timeout_secs = 0.4\nrequest_timeout_secs = 0.7\n\
+         max_concurrent_requests = 1\n[providers.mistral]\napi_key = 'k'\nbase_url = '{base}/slow'"
+    ))
+    .unwrap();
+    let app = puffinparse_server::app(Arc::new(AppState::from_config_quiet(cfg).unwrap()));
+    let (a, b) = (app.clone(), app.clone());
+    let first = tokio::spawn(async move { send(&a, post_json("/v1/ocr", Some("sk-m"), doc("mistral"))).await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let second = tokio::spawn(async move { send(&b, post_json("/v1/ocr", Some("sk-m"), doc("mistral"))).await });
+    // /health is outside the limit and answers while both document requests are busy.
+    let (s, _, _, _) = send(&app, Request::get("/health").body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s1, _, b1, _) = first.await.unwrap();
+    let (s2, _, b2, _) = second.await.unwrap();
+    // The first hits the provider deadline (0.4 s); the second waited for the only slot and then
+    // ran into the gateway's own request limit (0.7 s).
+    assert_eq!(s1, StatusCode::GATEWAY_TIMEOUT, "{b1}");
+    assert_eq!(s2, StatusCode::GATEWAY_TIMEOUT, "{b2}");
+    assert!(b2["error"]["message"].as_str().unwrap().contains("request_timeout_secs"), "{b2}");
 }

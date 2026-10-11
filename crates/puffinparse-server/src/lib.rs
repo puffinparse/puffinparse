@@ -30,11 +30,24 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 /// A provider call target with credentials resolved.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Deployment {
     pub model: String,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+}
+
+/// Shown in `Debug` instead of a secret.
+const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for Deployment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Deployment")
+            .field("model", &self.model)
+            .field("api_key", &self.api_key.as_ref().map(|_| REDACTED))
+            .field("base_url", &self.base_url)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -45,7 +58,6 @@ pub(crate) struct Alias {
     pub cursor: AtomicUsize,
 }
 
-#[derive(Debug)]
 pub(crate) struct VirtualKey {
     pub id: String,
     pub secret: String,
@@ -54,8 +66,19 @@ pub(crate) struct VirtualKey {
     pub rpm: Option<u32>,
 }
 
-/// Everything a request handler needs. Built once from a [`Config`].
-#[derive(Debug)]
+impl std::fmt::Debug for VirtualKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VirtualKey")
+            .field("id", &self.id)
+            .field("secret", &REDACTED)
+            .field("models", &self.models)
+            .field("monthly_budget_usd", &self.monthly_budget_usd)
+            .field("rpm", &self.rpm)
+            .finish()
+    }
+}
+
+/// Everything a request handler needs. Built once from a [`Config`]. `Debug` redacts every secret.
 pub struct AppState {
     pub(crate) server: config::ServerConfig,
     pub(crate) master_key: Option<String>,
@@ -68,6 +91,24 @@ pub struct AppState {
     pub(crate) usage: usage::UsageStore,
     pub(crate) metrics: metrics::Metrics,
     pub(crate) logger: log::Logger,
+}
+
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let providers: BTreeMap<&str, (Option<&str>, Option<&str>)> = self
+            .providers
+            .iter()
+            .map(|(name, (key, base))| (name.as_str(), (key.as_ref().map(|_| REDACTED), base.as_deref())))
+            .collect();
+        f.debug_struct("AppState")
+            .field("server", &self.server)
+            .field("master_key", &self.master_key.as_ref().map(|_| REDACTED))
+            .field("providers", &providers)
+            .field("aliases", &self.aliases)
+            .field("keys", &self.keys)
+            .field("webhook_secret", &self.webhook_secret.as_ref().map(|_| REDACTED))
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) fn default_fallback_on() -> Vec<ErrorKind> {
@@ -176,6 +217,25 @@ impl AppState {
     pub fn auth_enabled(&self) -> bool {
         self.master_key.is_some() || !self.keys.is_empty()
     }
+
+    /// Refuse an open gateway on a non-loopback address unless the operator said so explicitly.
+    pub fn check_exposure(&self) -> Result<(), String> {
+        if self.auth_enabled() || self.server.allow_unauthenticated || is_loopback_host(&self.server.host) {
+            return Ok(());
+        }
+        Err(format!(
+            "refusing to serve on {} without authentication: set master_key or add [[keys]] (see docs/SERVER.md), \
+             bind to 127.0.0.1, or set server.allow_unauthenticated = true if something in front of the gateway \
+             already authenticates every caller",
+            self.server.host
+        ))
+    }
+}
+
+/// `localhost`, `127.0.0.0/8` and `::1` (with or without brackets).
+pub fn is_loopback_host(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    h.eq_ignore_ascii_case("localhost") || h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The axum application (all routes and layers), for embedding or for tests.
@@ -187,9 +247,15 @@ pub fn app(state: Arc<AppState>) -> axum::Router {
 pub async fn serve(cfg: Config) -> Result<(), String> {
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
     let state = Arc::new(AppState::from_config(cfg)?);
+    state.check_exposure()?;
     if !state.auth_enabled() {
         eprintln!("warning: no master_key or [[keys]] configured; the gateway is open to anyone who can reach it");
     }
+    // `document_url` downloads in this process follow the gateway's config, not the environment.
+    puffinparse_core::fetch::set_process_policy(puffinparse_core::fetch::FetchPolicy {
+        allow_private: state.server.allow_private_document_urls,
+        max_bytes: state.server.max_download_mb.saturating_mul(1024 * 1024),
+    });
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| format!("cannot bind {addr}: {e}"))?;
     let local = listener.local_addr().map(|a| a.to_string()).unwrap_or(addr);
     eprintln!(
@@ -198,7 +264,54 @@ pub async fn serve(cfg: Config) -> Result<(), String> {
         state.aliases.len(),
         state.keys.len()
     );
-    axum::serve(listener, app(state)).with_graceful_shutdown(shutdown()).await.map_err(|e| format!("server error: {e}"))
+    let header_timeout = std::time::Duration::from_secs_f64(state.server.header_read_timeout_secs);
+    serve_connections(listener, app(state), header_timeout).await
+}
+
+/// The accept loop. Hand-written instead of `axum::serve` only to set hyper's header read timeout
+/// (a client that trickles its headers would otherwise hold a connection open indefinitely).
+async fn serve_connections(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    header_timeout: std::time::Duration,
+) -> Result<(), String> {
+    use hyper_util::rt::{TokioIo, TokioTimer};
+    let mut http = hyper::server::conn::http1::Builder::new();
+    http.timer(TokioTimer::new()).header_read_timeout(header_timeout);
+    let graceful = hyper_util::server::graceful::GracefulShutdown::new();
+    let mut stop = std::pin::pin!(shutdown());
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let stream = match accepted {
+                    Ok((stream, _)) => stream,
+                    Err(e) => {
+                        // Out of file descriptors and similar: back off instead of spinning.
+                        tracing::warn!(error = %e, "gateway: accept failed");
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+                let service = hyper_util::service::TowerToHyperService::new(app.clone());
+                let conn = graceful.watch(http.serve_connection(TokioIo::new(stream), service));
+                tokio::spawn(async move {
+                    if let Err(e) = conn.await {
+                        tracing::debug!(error = %e, "gateway: connection ended with an error");
+                    }
+                });
+            }
+            () = &mut stop => break,
+        }
+    }
+    drop(listener);
+    // Let in-flight requests finish, bounded so a stuck connection cannot block shutdown forever.
+    tokio::select! {
+        () = graceful.shutdown() => {}
+        () = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+            eprintln!("puffinparse gateway: connections still open after 30 s; exiting");
+        }
+    }
+    Ok(())
 }
 
 async fn shutdown() {

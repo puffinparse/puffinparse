@@ -2,7 +2,7 @@
 # Full reference: docs/SERVER.md. Secrets are "env:VAR" references, resolved at startup.
 
 # Full-access token (all models, no budget or rate limit). Omit it and all [[keys]] to run an
-# open gateway (only do that on localhost).
+# open gateway: only allowed on a loopback host unless server.allow_unauthenticated = true.
 master_key = "env:PUFFINPARSE_MASTER_KEY"
 
 [server]
@@ -16,6 +16,18 @@ max_timeout_secs = 300
 max_retries = 2
 allow_direct_models = true  # false = clients may only use the aliases below
 job_retention_hours = 168   # POST /v1/jobs handles stay readable this long
+
+# Hardening (defaults shown; docs/SERVER.md#hardening explains each).
+fetch_document_urls = false          # true: accept document_url for models whose provider cannot
+                                     # fetch URLs (the gateway then downloads it; public IPs only)
+allow_private_document_urls = false  # true: let those downloads reach private/loopback addresses
+max_download_mb = 50
+allow_local_engines = false          # true: any key may name tesseract/docling/paddleocr/vllm
+public_metrics = false               # true: GET /metrics without a key
+max_concurrent_requests = 64         # document requests in flight; the rest wait for a slot
+# request_timeout_secs = 360         # hard per-request limit (default max_timeout_secs + 60)
+header_read_timeout_secs = 30
+allow_unauthenticated = false        # true: start without keys on a non-loopback host
 
 # Optional receiver for provider webhooks about jobs submitted through POST /v1/jobs.
 # [webhooks]

@@ -23,16 +23,13 @@ puffinparse serve --config examples/server/puffinparse.toml          # --host / 
 ```
 
 Without `--config` it reads `./puffinparse.toml` if present (or `$PUFFINPARSE_CONFIG`), else runs with
-defaults: `127.0.0.1:4000`, no aliases, **no auth** (a warning is printed). Anything reachable
-beyond localhost should have a `master_key` or `[[keys]]`.
+defaults: `127.0.0.1:4000`, no aliases, **no auth** (a warning is printed). On any address other
+than loopback (`127.0.0.0/8`, `::1`, `localhost`) the gateway **refuses to start** without a
+`master_key` or `[[keys]]`, unless `server.allow_unauthenticated = true` says something in front
+of it already authenticates every caller.
 
-> **Do not expose the gateway to untrusted callers yet.** Run it on localhost or a private
-> network, behind auth. Two hardening items are still open: some models download
-> `document_url` inside the gateway process (Tesseract, PaddleOCR, Unstructured, Textract,
-> Gemini, the OpenAI and Anthropic vision models, Upstage, Document AI, LlamaParse extract), and
-> the download does not yet refuse private or link-local addresses; and the gateway does not
-> yet cap concurrency or request time. Put it behind a reverse proxy with limits, and only
-> accept URLs from callers you trust.
+The defaults are meant for a gateway that untrusted callers can reach; see
+[Hardening](#hardening) for what they do and how to loosen them. Terminate TLS in front of it.
 
 Docker (multi-stage build, distroless runtime, runs as non-root). Releases publish the image to
 `ghcr.io/ajinkyashejul/puffinparse` (tags `latest`, the version such as `0.1.2`, and `0.1`). From the
@@ -49,7 +46,8 @@ docker run --rm -p 4000:4000 -v $PWD/examples/server/puffinparse.toml:/etc/puffi
 ```
 
 The image's default command is `serve --host 0.0.0.0 --config /etc/puffinparse/puffinparse.toml`; it exits
-if no config is mounted rather than serving an open gateway.
+if no config is mounted, or if the config defines no `master_key` / `[[keys]]`, rather than serving
+an open gateway.
 
 ## Configuration (`puffinparse.toml`)
 
@@ -71,6 +69,16 @@ max_timeout_secs = 300                   # cap (and default) for a request's `ti
 max_retries = 2                          # per provider call, when the client sends none
 allow_direct_models = true               # false: only the aliases below may be requested
 job_retention_hours = 168                # how long POST /v1/jobs handles stay readable
+# Hardening (defaults shown; see "Hardening" below)
+allow_unauthenticated = false            # true: start without keys even on a non-loopback host
+allow_local_engines = false              # true: any key may name tesseract/docling/paddleocr/vllm
+fetch_document_urls = false              # true: accept document_url for models the gateway downloads
+allow_private_document_urls = false      # true: those downloads may reach private/loopback addresses
+max_download_mb = 50                     # cap on such a download
+public_metrics = false                   # true: GET /metrics without a key
+max_concurrent_requests = 64             # document requests in flight; more wait for a slot
+# request_timeout_secs = 360             # hard limit per HTTP request (default max_timeout_secs + 60)
+header_read_timeout_secs = 30            # time a client has to send its request headers
 
 [webhooks]                               # optional provider webhook receiver (off by default)
 enabled = false
@@ -97,7 +105,11 @@ rpm = 60                                 # requests per minute, sliding 60 s win
 A complete sample is [`examples/server/puffinparse.toml`](../examples/server/puffinparse.toml).
 
 **Routing.** `model` is looked up as an alias first, then (if `allow_direct_models`) as a registry
-model (`reducto/standard`, or a bare provider for its default model in that mode). An alias expands
+model (`reducto/standard`, or a bare provider for its default model in that mode). A self-hosted
+engine (`tesseract`, `docling`, `paddleocr`, `vllm`) named directly is only served to a key whose
+`models` names it (`"tesseract/*"`, `"docling/default"`; `"*"` and an empty list do not count), to
+the master key, or with `allow_local_engines = true`; behind an alias it is served to any key
+allowed that alias. An alias expands
 to its targets: `ordered` always starts at the first, `round_robin` rotates the start per request,
 and both fall back in order when the error kind is in `fallback_on`. A request's own `fallbacks`
 list is appended after that (aliases expand in order). Every target is checked against the
@@ -130,7 +142,7 @@ JSON-valued ones — `provider_options`, `schema`, `metadata`, `fallbacks` — a
 | Field | Type | Notes |
 |---|---|---|
 | `model` | string | **Required.** Alias or `provider/model`. |
-| `document_url` | string | Public http(s) URL. Passed to the provider where it accepts URLs; otherwise the gateway downloads it (see the warning above). |
+| `document_url` | string | Public http(s) URL. Passed to the provider where it accepts URLs; for the other models it is rejected (400) unless `server.fetch_document_urls` is on, and then downloaded by the gateway with address filtering ([Hardening](#hardening)). |
 | `document` | string | Base64 bytes (a `data:…;base64,` prefix is accepted). Needs `filename`. |
 | `file` | multipart file part | The upload; its filename sets the type (or send `filename`). |
 | `filename` | string | Sets the MIME type for `document` / overrides the part's filename. |
@@ -223,13 +235,13 @@ Every error has the same body:
 | 400 | `input_error`, `bad_request_error`, `unsupported_model_error` | Malformed request, provider 4xx, unknown model or model without this mode |
 | 401 | `unauthorized` | Missing or unknown gateway key |
 | 402 | `budget_exceeded` | Key's monthly budget spent |
-| 403 | `model_not_allowed` | Model (or a fallback) not in the key's `models` |
+| 403 | `model_not_allowed` | Model (or a fallback) not in the key's `models`, or a self-hosted engine the key may not name |
 | 404 | `not_found` | Unknown job id, a job another key owns, or webhooks disabled |
 | 413 | `payload_too_large` | Body over `max_body_mb` |
 | 429 | `key_rate_limited` | Key's `rpm` reached (`Retry-After` set) |
 | 429 | `rate_limit_error` | Provider rate limit after retries and fallbacks |
 | 502 | `provider_error`, `network_error`, `authentication_error` | Provider 5xx / failed job, network failure, provider rejected the gateway's credentials |
-| 504 | `timeout_error` | `timeout` exceeded |
+| 504 | `timeout_error` | `timeout` exceeded, or the gateway's own `request_timeout_secs` |
 
 Provider credential failures are 502, not 401: the caller's key was fine, the operator's was not.
 
@@ -246,8 +258,9 @@ keys for the master key.
 
 ### `GET /health`, `GET /metrics`
 
-`/health` → `{"status": "ok", "version": …}`. `/metrics` is Prometheus text, unauthenticated
-(it carries model names, counts and costs, no secrets or content; firewall it if that matters):
+`/health` → `{"status": "ok", "version": …}` (no auth). `/metrics` is Prometheus text and needs a
+gateway key (any virtual key or the master key; give the scraper its own `[[keys]]` entry) unless
+`server.public_metrics = true`. It carries model names, counts and costs, no secrets or content:
 
 | Metric | Labels |
 |---|---|
@@ -262,6 +275,53 @@ keys for the master key.
 `mode` is `parse` / `ocr` / `extract` for the synchronous endpoints and `job_submit`,
 `job_retrieve`, `webhook` for the jobs API, so job latencies do not mix with blocking calls. A
 job's pages and cost are counted once, when it is first seen succeeded.
+
+## Hardening
+
+What the defaults do, and the setting that loosens each one. Changing a default is a deliberate
+choice for a gateway whose callers you trust.
+
+| Concern | Default | Setting |
+|---|---|---|
+| Open gateway | Refuses to start on a non-loopback host without `master_key` / `[[keys]]` | `allow_unauthenticated` |
+| `document_url` downloaded by the gateway | Rejected with 400 for models whose provider cannot fetch URLs | `fetch_document_urls` |
+| Where those downloads may connect | Public addresses only | `allow_private_document_urls` |
+| Download size | 50 MiB | `max_download_mb` |
+| Self-hosted engines | Only via an alias, a key that names them, or the master key | `allow_local_engines` |
+| `/metrics` | Needs a gateway key | `public_metrics` |
+| Concurrent document requests | 64; more wait for a slot | `max_concurrent_requests` |
+| One HTTP request | `max_timeout_secs` + 60 s, slot wait included, then 504 | `request_timeout_secs` |
+| Slow request headers | Connection closed after 30 s | `header_read_timeout_secs` |
+| Request body | 50 MiB, 413 above | `max_body_mb` |
+
+**Which models download `document_url` in the gateway.** Tesseract, Docling, PaddleOCR, vLLM,
+Unstructured, Textract, Gemini, the OpenAI and Anthropic vision models, Upstage, Document AI, and
+LlamaParse in `extract` mode: their APIs take bytes (or, for the self-hosted engines, their server
+sits on your network), so the gateway would fetch the URL itself. With `fetch_document_urls =
+false` (the default) such a request is answered `400 input_error` naming the setting, before any
+provider is called, and also when only one of an alias's targets or a request `fallbacks` entry
+would download. Reducto, Extend, LlamaParse parse, Mistral, Azure, Datalab, Mathpix, Landing AI
+and OpenDocRouter fetch URLs on their side and take `document_url` as before. The list is
+`puffinparse_core::fetch::fetches_url_in_process`.
+
+**When the gateway does download** (`fetch_document_urls = true`), it uses the core's restricted
+fetch ([SECURITY.md](../SECURITY.md#document-urls)): http(s) only; the host is resolved by the
+gateway and loopback, private, link-local (`169.254.169.254`), CGNAT, unique-local, multicast and
+reserved addresses are refused, the connection is pinned to the checked address, at most 5
+redirects each re-checked, `max_download_mb`, the request's deadline, no response body in errors.
+`allow_private_document_urls` lifts the address check; the process's
+`PUFFINPARSE_ALLOW_PRIVATE_URLS` / `PUFFINPARSE_MAX_DOWNLOAD_MB` variables are ignored by the
+gateway.
+
+**`allow_direct_models` stays `true` by default**: the quickstart, the sample config
+(`llamaparse/*` for the `research` key) and the curl examples name registry models directly. With
+it on, a key with an empty `models` list may call every provider the gateway has credentials for,
+so give each key an explicit `models` list (or set `allow_direct_models = false` to serve aliases
+only).
+
+Also: provider keys and virtual keys are never logged, and the gateway's `Debug` output redacts
+them; clients cannot send `api_key`, `base_url`, a local path, or the `provider_options` that pick
+a program on the server (`cmd`, `pdftoppm_cmd`).
 
 ## Request log
 
@@ -310,7 +370,7 @@ curl -s "$GW/v1/jobs/$JOB?output_format=reducto" -H "Authorization: Bearer $KEY"
 
 curl -s $GW/v1/models -H "Authorization: Bearer $KEY" | jq '.data[].id'
 curl -s $GW/v1/usage  -H "Authorization: Bearer $KEY"
-curl -s $GW/metrics
+curl -s $GW/metrics  -H "Authorization: Bearer $KEY"     # or server.public_metrics = true
 ```
 
 ## Not in scope (yet)
@@ -318,5 +378,5 @@ curl -s $GW/metrics
 Streaming, jobs for `ocr` / `extract` (jobs are parse-only, like the core), fallback for jobs,
 the gateway registering its own webhook URL with providers automatically, vendor HMAC signature
 checks on webhooks, key management over HTTP (keys live in the config file; restart to change them), a database, response
-caching, per-key budgets by model, TLS termination (put it behind a reverse proxy), and metrics
-auth.
+caching, per-key budgets by model, TLS termination (put it behind a reverse proxy), and per-IP
+rate limits (use the reverse proxy).

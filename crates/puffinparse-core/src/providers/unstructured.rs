@@ -72,17 +72,9 @@ async fn load_or_download(request: &DocumentRequest, deadline: &Deadline) -> Res
         return Ok(data);
     }
     let DocumentInput::Url { url } = &request.input else { unreachable!("load_bytes only returns None for URLs") };
-    tracing::debug!(%url, "unstructured: downloading remote document (no URL input on this endpoint)");
-    let resp = http::client().get(url).timeout(deadline.request_timeout()).send().await?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(Error::input(format!("could not download {url}: HTTP {}", status.as_u16())));
-    }
-    let data = resp.bytes().await?;
-    if data.is_empty() {
-        return Err(Error::input(format!("{url} returned an empty body")));
-    }
-    Ok(data)
+    // No URL input on this endpoint: download through the address-filtered fetch path.
+    let retry = Retry::new(request.max_retries);
+    Ok(crate::fetch::fetch_document(NAME, url, deadline, retry).await?.data)
 }
 
 /// Multipart text fields for the partition call.

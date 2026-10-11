@@ -61,7 +61,9 @@ dependency you introduced.
   in log output, in an error message, or in a serialized response, that is
   a vulnerability — please report it.
 - Document bytes are sent only to the selected provider. PuffinParse has no
-  telemetry and makes no network calls other than to the provider you choose.
+  telemetry and makes no network calls other than to the provider you choose
+  (and, for a URL input to a provider that cannot fetch URLs, to that URL; see
+  below).
 - Recorded test fixtures under `crates/puffinparse-core/tests/fixtures/` (and the
   sample responses in `docs/providers/`) must be redacted; never commit a fixture
   containing a real key, token, signed URL, dashboard link, or run, job, file or
@@ -74,3 +76,38 @@ dependency you introduced.
   are replaced; the scored `.md` outputs are never edited.
 - Releases are published to PyPI with trusted publishing (OIDC), so no
   long-lived PyPI token exists in this repository's secrets.
+
+## Document URLs
+
+A URL input is handed to the provider when its API accepts URLs (Reducto, Extend,
+LlamaParse parse, Mistral, Azure, Datalab, Mathpix, Landing AI, OpenDocRouter).
+Every other provider (Tesseract, Docling, PaddleOCR, vLLM, Unstructured, Textract,
+Gemini, the OpenAI and Anthropic vision models, Upstage, Document AI, LlamaParse
+extract) needs the bytes, so PuffinParse downloads the URL itself, in your
+process. Whoever chooses that URL chooses where your machine connects, so the
+download (`puffinparse_core::fetch`) is restricted by default, in the SDKs, the
+CLI and the gateway alike:
+
+- `http` and `https` only, no `user:password@` in the URL;
+- the host is resolved by PuffinParse and loopback, private (RFC 1918),
+  link-local (including the cloud metadata address `169.254.169.254`), CGNAT
+  (`100.64.0.0/10`), unique-local (`fc00::/7`), unspecified, multicast,
+  broadcast, documentation and reserved addresses, and IPv6 forms embedding any
+  of them, are refused; the connection goes only to an address that passed the
+  check, so DNS rebinding cannot swap one in afterwards;
+- proxy environment variables are ignored for these downloads;
+- at most 5 redirects, each target checked the same way;
+- at most 50 MiB (`PUFFINPARSE_MAX_DOWNLOAD_MB`), read within the request's
+  `timeout`;
+- error messages carry the HTTP status, never the response body.
+
+Docling and PaddleOCR used to pass URLs on to their server; they now download them
+the same way and send bytes, so a self-hosted server on your network is never asked
+to fetch a URL either.
+
+For a trusted setup that needs private addresses (a document server on your
+LAN), set `PUFFINPARSE_ALLOW_PRIVATE_URLS=1` in the process environment. There is
+deliberately no per-request option for it. The gateway ignores the variable and
+uses its own settings instead (`server.fetch_document_urls`,
+`server.allow_private_document_urls`, `server.max_download_mb`; see
+[docs/SERVER.md](docs/SERVER.md#hardening)).

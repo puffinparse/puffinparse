@@ -17,6 +17,10 @@ readme = "../../README.md"
 puffinparse-core = { workspace = true }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "query", "tokio"] }
 tower-http = { version = "0.6", features = ["catch-panic"] }
+tower = { version = "0.5", features = ["limit"] }
+# The accept loop in lib.rs: axum::serve does not expose hyper's header read timeout.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service", "server", "server-graceful", "http1"] }
 tokio = { workspace = true, features = ["net", "signal"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

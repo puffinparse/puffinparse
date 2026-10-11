@@ -501,7 +501,9 @@ curl -H "Authorization: Bearer $TEAM_KEY" -F file=@invoice.pdf -F model=invoices
 ordered or round-robin fallback), provider keys as `env:` references, and virtual keys with model
 allow-lists, monthly USD budgets and per-minute limits. `/v1/models`, `/v1/usage`, `/health` and
 Prometheus `/metrics` are built in; request logs are JSON lines that never contain document content
-or secrets. Reference: [`docs/SERVER.md`](https://github.com/ajinkyashejul/puffinparse/blob/main/docs/SERVER.md), sample:
+or secrets. Defaults are hardened for untrusted callers (no unauthenticated start off localhost,
+no in-gateway URL downloads unless enabled and then public addresses only, concurrency and
+request-time limits; see the Hardening section of `docs/SERVER.md`). Reference: [`docs/SERVER.md`](https://github.com/ajinkyashejul/puffinparse/blob/main/docs/SERVER.md), sample:
 [`examples/server/puffinparse.toml`](https://github.com/ajinkyashejul/puffinparse/blob/main/examples/server/puffinparse.toml).
 
 ### Rust

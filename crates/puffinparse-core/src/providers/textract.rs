@@ -392,17 +392,8 @@ impl Ctx {
             return Ok(data);
         }
         let crate::types::DocumentInput::Url { url } = &request.input else { unreachable!() };
-        tracing::debug!(%url, "textract: downloading URL input (Textract has no remote-URL support)");
-        let resp = http::client().get(url).timeout(self.deadline.request_timeout()).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(Error::input(format!("could not download {url}: HTTP {}", status.as_u16())));
-        }
-        let data = resp.bytes().await?;
-        if data.is_empty() {
-            return Err(Error::input(format!("{url} returned an empty body")));
-        }
-        Ok(data)
+        let retry = http::Retry::new(request.max_retries);
+        Ok(crate::fetch::fetch_document(NAME, url, &self.deadline, retry).await?.data)
     }
 }
 

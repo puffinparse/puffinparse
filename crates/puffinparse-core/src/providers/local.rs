@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 /// The document bytes: read from disk / taken from memory, or downloaded when the input is a URL
-/// (local engines cannot fetch it themselves, and a self-hosted server may not have egress).
+/// (local engines cannot fetch it themselves, and a self-hosted server may not have egress),
+/// through the address-filtered [`crate::fetch`] path.
 pub(crate) async fn load_or_download(
     provider_name: &str,
     request: &DocumentRequest,
@@ -21,17 +22,8 @@ pub(crate) async fn load_or_download(
         return Ok(data);
     }
     let DocumentInput::Url { url } = &request.input else { unreachable!("load_bytes only returns None for URLs") };
-    tracing::debug!(provider = provider_name, %url, "downloading remote document for a local engine");
-    let resp = http::client().get(url).timeout(deadline.request_timeout()).send().await?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(Error::input(format!("could not download {url}: HTTP {}", status.as_u16())));
-    }
-    let data = resp.bytes().await?;
-    if data.is_empty() {
-        return Err(Error::input(format!("{url} returned an empty body")));
-    }
-    Ok(data)
+    let retry = http::Retry::new(request.max_retries);
+    Ok(crate::fetch::fetch_document(provider_name, url, deadline, retry).await?.data)
 }
 
 /// What kind of file the bytes are, from magic numbers first and the filename second.

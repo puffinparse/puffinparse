@@ -20,7 +20,7 @@ use crate::error::{Error, Result};
 use crate::http::{self, Deadline, Retry};
 use crate::provider::{self, Provider};
 use crate::providers::local;
-use crate::types::{BBox, Block, BlockType, DocumentInput, DocumentRequest, OutputFormat, Page, ParseResponse, Usage};
+use crate::types::{BBox, Block, BlockType, DocumentRequest, OutputFormat, Page, ParseResponse, Usage};
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,7 +47,7 @@ impl Provider for Docling {
         let retry = Retry::new(request.max_retries);
         let client = http::client();
         let ranges = request.pages.as_deref().map(crate::util::parse_page_ranges).transpose()?;
-        let body = request_body(request, ranges.as_deref()).await?;
+        let body = request_body(request, ranges.as_deref(), &deadline).await?;
 
         let with_key = |rb: reqwest::RequestBuilder| match &api_key {
             Some(k) => rb.header("X-Api-Key", k),
@@ -132,7 +132,11 @@ fn task_failure_message(status: &Value) -> String {
     }
 }
 
-async fn request_body(request: &DocumentRequest, ranges: Option<&[(u32, Option<u32>)]>) -> Result<Value> {
+async fn request_body(
+    request: &DocumentRequest,
+    ranges: Option<&[(u32, Option<u32>)]>,
+    deadline: &Deadline,
+) -> Result<Value> {
     let mut options = Map::new();
     options.insert("to_formats".into(), json!(["json"]));
     options.insert("image_export_mode".into(), json!("placeholder"));
@@ -154,13 +158,12 @@ async fn request_body(request: &DocumentRequest, ranges: Option<&[(u32, Option<u
         }
         crate::util::deep_merge(&mut options, extra);
     }
-    let source = match &request.input {
-        DocumentInput::Url { url } => json!({"kind": "http", "url": url}),
-        _ => {
-            let data = provider::load_bytes(&request.input).await?.expect("non-URL inputs load bytes");
-            json!({"kind": "file", "base64_string": local::base64_encode(&data), "filename": request.input.filename()})
-        }
-    };
+    // A URL is downloaded here (address-filtered, see `crate::fetch`) and sent as a file, never as
+    // an `http` source: docling-serve sits on the operator's network, and letting it fetch a
+    // caller's URL would be a server-side request from inside it.
+    let data = local::load_or_download(NAME, request, deadline).await?;
+    let source =
+        json!({"kind": "file", "base64_string": local::base64_encode(&data), "filename": request.input.filename()});
     Ok(json!({"options": options, "sources": [source]}))
 }
 
@@ -630,7 +633,8 @@ mod tests {
             .pages("2-3,5")
             .language("de")
             .provider_options(json!({"table_mode": "fast", "to_formats": ["json", "md"]}));
-        let body = request_body(&req, Some(&crate::util::parse_page_ranges("2-3,5").unwrap())).await.unwrap();
+        let dl = Deadline::new(5.0);
+        let body = request_body(&req, Some(&crate::util::parse_page_ranges("2-3,5").unwrap()), &dl).await.unwrap();
         assert_eq!(body["sources"][0]["kind"], "file");
         assert_eq!(body["sources"][0]["base64_string"], "JVBERi0xLjQ=");
         assert_eq!(body["sources"][0]["filename"], "a.pdf");
@@ -638,11 +642,11 @@ mod tests {
         assert_eq!(body["options"]["ocr_lang"], json!(["de"]));
         assert_eq!(body["options"]["table_mode"], "fast");
         assert_eq!(body["options"]["to_formats"], json!(["json", "md"]));
-        let url = request_body(&DocumentRequest::from_url("https://x.test/a.pdf").pages("3-"), Some(&[(3, None)]))
+        // URLs are fetched in-process through the filtered path, never forwarded as an http source.
+        let e = request_body(&DocumentRequest::from_url("http://127.0.0.1/a.pdf"), Some(&[(3, None)]), &dl)
             .await
-            .unwrap();
-        assert_eq!(url["sources"][0], json!({"kind": "http", "url": "https://x.test/a.pdf"}));
-        assert_eq!(url["options"]["page_range"], json!([3, i64::MAX]));
+            .unwrap_err();
+        assert_eq!(e.kind, crate::error::ErrorKind::Input, "{e}");
     }
 
     /// Needs a running docling-serve (`DOCLING_BASE_URL`, default http://localhost:5001). Run with:

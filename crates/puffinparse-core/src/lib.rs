@@ -17,6 +17,7 @@
 pub mod bench;
 pub mod compat;
 pub mod error;
+pub mod fetch;
 pub mod http;
 pub mod jobs;
 pub mod model;

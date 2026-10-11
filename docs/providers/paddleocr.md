@@ -86,11 +86,13 @@ request fields: `useLayoutDetection`, `useChartRecognition`, `useSealRecognition
 One synchronous JSON call per document:
 
 ```json
-{"file": "<base64 of the file, or a URL the server can fetch>", "fileType": 0, "visualize": false}
+{"file": "<base64 of the file>", "fileType": 0, "visualize": false}
 ```
 
-`fileType` is `0` for PDF and `1` for images (from magic bytes, or from the URL's extension;
-omitted when unknown, and the server infers it). `visualize: false` stops the server from
+`fileType` is `0` for PDF and `1` for images (from magic bytes, then the file extension). A URL
+input is downloaded by PuffinParse first (public addresses only, 50 MiB cap; see
+[SECURITY.md](../../SECURITY.md#document-urls)) and sent as base64: the serving endpoint is never
+asked to fetch a URL itself. `visualize: false` stops the server from
 returning base64 visualisation images. `provider_options` are deep-merged into the body, so any
 documented field (`useDocOrientationClassify`, `useDocUnwarping`, `useTextlineOrientation`,
 `textDetLimitSideLen`, `textRecScoreThresh`, `useTableRecognition`, `returnMarkdownImages`, ...)

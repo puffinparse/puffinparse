@@ -9,6 +9,72 @@ Python package `puffinparse` share a single version. Entries before the rename s
 
 ## [Unreleased]
 
+### Security
+
+- Real provider ids are gone from committed test data: the Extend run, parse-run and file ids and
+  the dashboard link, the LlamaParse extract/parse job, file and project ids, and the Reducto job
+  ids and studio links in the live-captured fixtures (and the matching samples in
+  `docs/providers/extend.md` / `reducto.md`) are now obviously fake ids of the same prefix and
+  length. The 556 `studio.reducto.ai/job/<id>` links in the saved raw responses of runs
+  `run-20260924T211006Z` and `run-20260925T090851Z` point at a zero UUID; the scored `.md` outputs
+  are untouched and `bench rescore` reproduces every score. Benchmark results keep
+  `provider_job_id` for auditability, as `SECURITY.md` now states.
+- **Document URLs are downloaded through one hardened path** (`puffinparse_core::fetch`). Providers
+  without URL input (Tesseract, Docling, PaddleOCR, vLLM, Unstructured, Textract, Gemini, the
+  OpenAI and Anthropic vision models, Upstage, Document AI, LlamaParse extract) fetched
+  `document_url` in-process with no address filtering and reqwest's default 10 redirects, so a
+  caller-chosen URL could reach `169.254.169.254`, localhost or the private network (SSRF). The
+  download now accepts http(s) only, resolves the host itself and refuses loopback, private,
+  link-local, CGNAT, unique-local, multicast, broadcast and reserved addresses (including
+  IPv4-mapped and NAT64/6to4 forms), connects only to the vetted address (no DNS rebinding),
+  ignores proxy variables, follows at most 5 redirects re-checking each hop, stops at 50 MiB
+  (`PUFFINPARSE_MAX_DOWNLOAD_MB`) and the request deadline, and never echoes the response body in
+  an error (Gemini, Upstage and Document AI used to include part of it).
+- `DocumentRequest`'s `Debug` output no longer prints `api_key` or `webhook_url` (which may carry a
+  shared secret), nor the document bytes.
+- Gateway hardening (`docs/SERVER.md#hardening`): `document_url` is no longer downloaded inside the
+  gateway by default; self-hosted engines are no longer open to every key; concurrency, a
+  per-request time limit and a header read timeout are enforced; `/metrics` needs a key; the
+  gateway refuses to start unauthenticated on a public address; `Debug` of the gateway's config,
+  deployments, virtual keys and state redacts every secret. The "do not expose yet" warning is gone.
+
+### Changed
+
+- **Behaviour change for SDK and CLI users:** a URL input to one of the providers above that
+  points at a private, loopback or link-local address now fails with `InputError`. Set
+  `PUFFINPARSE_ALLOW_PRIVATE_URLS=1` in a trusted setup to allow it (process-wide; there is no
+  per-request switch). Downloads over 50 MiB fail unless `PUFFINPARSE_MAX_DOWNLOAD_MB` is raised.
+- **Breaking for gateway operators** (`puffinparse serve`):
+  - The gateway refuses to start on a non-loopback `host` (for example the Docker image's
+    `0.0.0.0`) without `master_key` or `[[keys]]`; set `server.allow_unauthenticated = true` if a
+    proxy in front already authenticates every caller.
+  - `document_url` with a model whose provider cannot fetch URLs (Tesseract, Docling, PaddleOCR,
+    vLLM, Unstructured, Textract, Gemini, OpenAI, Anthropic, Upstage, Document AI, LlamaParse
+    extract) is rejected with `400 input_error`, also when only an alias target or a request
+    fallback would download. Uploads and URL-capable providers (Reducto, Extend, LlamaParse parse,
+    Mistral, Azure, Datalab, Mathpix, Landing AI, OpenDocRouter) are unaffected. New
+    `server.fetch_document_urls = true` restores it, with public addresses only
+    (`server.allow_private_document_urls`, `server.max_download_mb`); the gateway ignores
+    `PUFFINPARSE_ALLOW_PRIVATE_URLS`.
+  - Self-hosted engines named directly (`tesseract`, `docling/default`, ...) get `403
+    model_not_allowed` unless the key's `models` names them (`"*"` or an empty list does not
+    count), the master key calls, or `server.allow_local_engines = true`. Aliases targeting them
+    work as before. `GET /v1/models` hides them from keys that cannot use them.
+  - `GET /metrics` needs a gateway key (any virtual key or the master key) unless
+    `server.public_metrics = true`; point the Prometheus scraper at it with a bearer token.
+  - New limits: `server.max_concurrent_requests` (default 64 document requests in flight, the
+    rest wait), `server.request_timeout_secs` (default `max_timeout_secs` + 60; then `504
+    timeout_error`), `server.header_read_timeout_secs` (default 30).
+  - `server.allow_direct_models` keeps its default (`true`); give every key an explicit `models`
+    list.
+- Docling and PaddleOCR no longer forward a URL input to docling-serve / the PaddleOCR server
+  (which would fetch it from inside your network); PuffinParse downloads it through the same path
+  and sends the bytes. PaddleOCR's `fileType` now always comes from the downloaded bytes.
+- CI (and `make lint`) runs `scripts/third_party_notices.py --check`, which now also fails when a
+  bundled crate has no licence text or `licenses/extra/` holds an unused entry.
+- `pyproject.toml` uses an SPDX `license = "MIT"` with `license-files` (core metadata 2.4) and
+  requires maturin >= 1.9.3.
+
 ### Added
 
 - `puffinparse bench report --by-dataset [--intro FILE]` renders the whole leaderboard page: one
@@ -40,24 +106,6 @@ Python package `puffinparse` share a single version. Entries before the rename s
   licence file have theirs under `licenses/extra/`, fetched from the crate's repository at the
   published commit; r-efi's notices come from its `AUTHORS` file. `scripts/check_release_licenses.py`
   fails a release build whose artifact lacks them.
-
-### Changed
-
-- CI (and `make lint`) runs `scripts/third_party_notices.py --check`, which now also fails when a
-  bundled crate has no licence text or `licenses/extra/` holds an unused entry.
-- `pyproject.toml` uses an SPDX `license = "MIT"` with `license-files` (core metadata 2.4) and
-  requires maturin >= 1.9.3.
-
-### Security
-
-- Real provider ids are gone from committed test data: the Extend run, parse-run and file ids and
-  the dashboard link, the LlamaParse extract/parse job, file and project ids, and the Reducto job
-  ids and studio links in the live-captured fixtures (and the matching samples in
-  `docs/providers/extend.md` / `reducto.md`) are now obviously fake ids of the same prefix and
-  length. The 556 `studio.reducto.ai/job/<id>` links in the saved raw responses of runs
-  `run-20260924T211006Z` and `run-20260925T090851Z` point at a zero UUID; the scored `.md` outputs
-  are untouched and `bench rescore` reproduces every score. Benchmark results keep
-  `provider_job_id` for auditability, as `SECURITY.md` now states.
 
 ## [0.1.6] - 2026-10-08
 

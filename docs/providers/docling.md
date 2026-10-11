@@ -63,7 +63,9 @@ Asynchronous, because the synchronous `/v1/convert/source` is capped by the serv
    }
    ```
 
-   URL inputs are sent as `{"kind": "http", "url": "..."}` and fetched by the server.
+   URL inputs are downloaded by PuffinParse (public addresses only, 50 MiB cap; see
+   [SECURITY.md](../../SECURITY.md#document-urls)) and sent as a `file` source: docling-serve is
+   never asked to fetch a URL itself.
    `page_range` is only set when `pages` is given (docling takes one span; PuffinParse requests the
    span covering the selection and drops the other pages); `ocr_lang` only when `language` is set.
    `provider_options` are deep-merged into `options`.

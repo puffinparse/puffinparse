@@ -52,12 +52,7 @@ impl Provider for LlamaParse {
             Some(data) => data,
             None => {
                 let DocumentInput::Url { url } = &doc.input else { unreachable!() };
-                let resp = client.get(url).timeout(deadline.request_timeout()).send().await?;
-                let status = resp.status();
-                if !status.is_success() {
-                    return Err(Error::input(format!("could not download {url}: HTTP {status}")));
-                }
-                resp.bytes().await?
+                crate::fetch::fetch_document(NAME, url, &deadline, retry).await?.data
             }
         };
         let file: UploadedFile = http::with_retry(NAME, retry, &deadline, || {

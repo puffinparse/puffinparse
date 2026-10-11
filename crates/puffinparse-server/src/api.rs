@@ -22,18 +22,37 @@ use std::time::Instant;
 
 pub(crate) fn router(state: Arc<AppState>) -> axum::Router {
     let limit = state.server.max_body_mb.saturating_mul(1024 * 1024);
+    let request_timeout = state.server.request_timeout();
+    // One semaphore shared by every document route: at most `max_concurrent_requests` provider
+    // calls in flight; the rest wait (bounded by the request timeout below).
+    let concurrency = tower::limit::GlobalConcurrencyLimitLayer::new(state.server.max_concurrent_requests);
     axum::Router::new()
-        .route("/health", get(health))
-        .route("/metrics", get(metrics))
-        .route("/v1/models", get(models))
-        .route("/v1/usage", get(usage))
         .route("/v1/parse", post(|s: State<Arc<AppState>>, r: Request| run(s, Mode::Parse, r)))
         .route("/v1/ocr", post(|s: State<Arc<AppState>>, r: Request| run(s, Mode::Ocr, r)))
         .route("/v1/extract", post(|s: State<Arc<AppState>>, r: Request| run(s, Mode::Extract, r)))
         .route("/v1/jobs", post(crate::jobs::submit))
         .route("/v1/jobs/{id}", get(crate::jobs::retrieve))
         .route("/v1/webhooks/{provider}", post(crate::jobs::webhook))
+        .route_layer(concurrency)
+        .route("/health", get(health))
+        .route("/metrics", get(metrics))
+        .route("/v1/models", get(models))
+        .route("/v1/usage", get(usage))
         .layer(DefaultBodyLimit::max(limit))
+        .layer(axum::middleware::from_fn(move |req: Request, next: axum::middleware::Next| async move {
+            match tokio::time::timeout(request_timeout, next.run(req)).await {
+                Ok(resp) => resp,
+                Err(_) => ApiError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "timeout_error",
+                    format!(
+                        "the gateway's request limit ({}s, server.request_timeout_secs) was reached",
+                        request_timeout.as_secs()
+                    ),
+                )
+                .into_response(),
+            }
+        }))
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(|_| {
             ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", "internal server error").into_response()
         }))
@@ -116,6 +135,64 @@ fn allowed(patterns: &[String], name: &str) -> bool {
         };
         matches(name) || qualified.as_deref().is_some_and(matches)
     })
+}
+
+/// Like [`allowed`], but only for a pattern that names the model or its provider: `*` and an
+/// empty list (which allow everything) do not count.
+fn explicitly_allowed(patterns: &[String], name: &str) -> bool {
+    let named: Vec<String> = patterns.iter().filter(|p| p.as_str() != "*").cloned().collect();
+    !named.is_empty() && allowed(&named, name)
+}
+
+/// Self-hosted engines run on the gateway host (Tesseract, `pdftoppm`) or on servers on the
+/// operator's network, so naming one directly needs more than a catch-all key: an alias, a key
+/// whose `models` names it, the master key, or `server.allow_local_engines`.
+pub(crate) fn may_use_local_engine(state: &AppState, who: &Principal, name: &str) -> bool {
+    let Ok(r) = ModelRef::parse(name) else { return true };
+    if !puffinparse_core::model::SELF_HOSTED.contains(&r.provider.as_str()) || state.server.allow_local_engines {
+        return true;
+    }
+    match who {
+        Principal::Master => true,
+        Principal::Key(i) => explicitly_allowed(&state.keys[*i].models, name),
+        Principal::Anonymous => false,
+    }
+}
+
+fn check_local_engine(state: &AppState, who: &Principal, name: &str) -> Result<(), ApiError> {
+    if may_use_local_engine(state, who, name) {
+        return Ok(());
+    }
+    Err(ApiError::forbidden(format!(
+        "'{name}' is a self-hosted engine and runs on the gateway's own machine or network: it is only served \
+         through an alias, to a key whose 'models' names it, or with server.allow_local_engines = true"
+    )))
+}
+
+/// `document_url` with a model that would download it inside the gateway (rather than hand it to
+/// the provider) needs `server.fetch_document_urls`.
+pub(crate) fn check_document_url(
+    state: &AppState,
+    doc: &DocumentRequest,
+    mode: Mode,
+    deployments: &[Deployment],
+) -> Result<(), ApiError> {
+    if state.server.fetch_document_urls || !matches!(doc.input, DocumentInput::Url { .. }) {
+        return Ok(());
+    }
+    for d in deployments {
+        let provider = d.model.split('/').next().unwrap_or("");
+        if puffinparse_core::fetch::fetches_url_in_process(provider, mode) {
+            return Err(ApiError::input(format!(
+                "'{}' cannot take 'document_url' on this gateway: that provider does not fetch URLs itself, so the \
+                 gateway would have to download the document from its own network, which is off \
+                 (server.fetch_document_urls = false). Upload the file instead ('file' or base64 'document'), \
+                 or use a model whose provider fetches URLs (Reducto, Extend, LlamaParse, Mistral, Azure, ...)",
+                d.model
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn check_model_access(state: &AppState, who: &Principal, name: &str) -> Result<(), ApiError> {
@@ -345,6 +422,7 @@ fn plan(
             out.extend((0..n).map(|i| alias.targets[(start + i) % n].clone()));
             fallback_on.get_or_insert_with(|| alias.fallback_on.clone());
         } else if state.server.allow_direct_models {
+            check_local_engine(state, who, name)?;
             out.push(Deployment { model: name.to_string(), api_key: None, base_url: None });
         } else {
             return Err(unknown_model(name));
@@ -393,6 +471,7 @@ pub(crate) fn plan_job(
         };
         (alias.targets[index].clone(), Some((model.to_string(), index)))
     } else if state.server.allow_direct_models {
+        check_local_engine(state, who, model)?;
         (Deployment { model: model.to_string(), api_key: None, base_url: None }, None)
     } else {
         return Err(unknown_model(model));
@@ -537,6 +616,7 @@ async fn handle(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<Served,
         return Err(ApiError::input("'webhook_url' belongs to POST /v1/jobs (asynchronous parse)"));
     }
     let doc = build_doc(state, &mut body)?;
+    check_document_url(state, &doc, ctx.mode, &deployments)?;
     let format = output_shape(body.output_format.as_deref())?;
     if ctx.mode == Mode::Ocr && format != puffinparse_core::OutputShape::Puffinparse {
         return Err(ApiError::input("output_format applies to /v1/parse and /v1/extract only"));
@@ -708,7 +788,12 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok", "version": puffinparse_core::VERSION }))
 }
 
-async fn metrics(State(state): State<Arc<AppState>>) -> Response {
+async fn metrics(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !state.server.public_metrics {
+        if let Err(e) = authenticate(&state, &headers) {
+            return e.into_response();
+        }
+    }
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")], state.metrics.render()).into_response()
 }
 
@@ -747,7 +832,7 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         for p in puffinparse_core::PROVIDERS {
             for m in p.models {
                 let q = m.qualified();
-                if !allowed(patterns, &q) {
+                if !allowed(patterns, &q) || !may_use_local_engine(&state, &who, &q) {
                     continue;
                 }
                 let per_page: serde_json::Map<String, Value> = m
