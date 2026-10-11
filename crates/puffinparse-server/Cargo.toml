@@ -17,7 +17,7 @@ readme = "../../README.md"
 [dependencies]
 puffinparse-core = { workspace = true }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "query", "tokio"] }
-tower-http = { version = "0.6", features = ["catch-panic", "cors"] }
+tower-http = { version = "0.7", features = ["catch-panic", "cors"] }
 tower = { version = "0.5", features = ["limit", "util"] }
 # The accept loop in lib.rs: axum::serve does not expose hyper's header read timeout.
 hyper = { version = "1", features = ["server", "http1"] }
