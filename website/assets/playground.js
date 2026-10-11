@@ -1026,7 +1026,8 @@
     function runLive() {
       // Free tier: read the session's token on every request, since supabase-js refreshes it
       // during a long poll and the gateway ties the jobs to the user, not to one token.
-      var startToken = S.session.access_token;
+      // Own-key runs need no sign-in, so there may be no session at all.
+      var startToken = S.session ? S.session.access_token : "";
       var auth = S.mode === "free"
         ? { mode: "free", get token() { return (S.session && S.session.access_token) || startToken; } }
         : { mode: "byok", keys: S.keys };
