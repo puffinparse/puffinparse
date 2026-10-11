@@ -514,6 +514,12 @@ async fn list_models_reports_keys_without_echoing_them() {
     let mut line = format!("{{\"text\":\"key is {secret}\"}}");
     super::redact(&mut line, &[secret.to_string()]);
     assert_eq!(line, "{\"text\":\"key is [redacted]\"}");
+    // A key with characters JSON escapes is matched in its escaped form as well.
+    let odd = "k3y\"with\\quote\tand-tab";
+    let mut line = serde_json::to_string(&json!({ "text": format!("echo: {odd}") })).unwrap();
+    assert!(!line.contains(odd), "the raw form is not in the serialised line");
+    super::redact(&mut line, &[odd.to_string()]);
+    assert_eq!(line, "{\"text\":\"echo: [redacted]\"}");
 }
 
 #[tokio::test]
@@ -533,7 +539,21 @@ async fn cancelled_calls_send_no_result_and_do_not_block_others() {
     c.send(json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": 1, "reason": "test" } }))
         .await;
     assert_eq!(c.request(3, "ping", json!({})).await["id"], 3);
-    // Nothing more arrives for request 1.
+
+    // A second call reusing an id that is still in flight is refused; the first stays cancellable.
+    let call = |id: i64| {
+        json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                   "params": { "name": "parse", "arguments": { "file": file, "model": "mistral/ocr-latest" } } })
+    };
+    c.send(call(4)).await;
+    c.send(call(4)).await;
+    let dup = c.recv().await;
+    assert_eq!(dup["error"]["code"], -32600, "{dup}");
+    assert!(dup["error"]["message"].as_str().unwrap().contains("already in flight"), "{dup}");
+    c.send(json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": 4, "reason": "test" } }))
+        .await;
+    assert_eq!(c.request(5, "ping", json!({})).await["id"], 5);
+    // Nothing more arrives for requests 1 or 4.
     let next = tokio::time::timeout(Duration::from_millis(300), c.lines.next_line()).await;
     assert!(next.is_err(), "unexpected message after cancellation: {next:?}");
 }
