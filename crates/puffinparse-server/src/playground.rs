@@ -305,15 +305,25 @@ impl Quota {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
-    /// Reserve `pages` model-pages for `user` today.
-    async fn reserve(&self, user: &str, pages: u32, limit: u32, budget: f64) -> Result<Result<u32, Refusal>, ApiError> {
+    /// Reserve `pages` model-pages for `user` and `usd` of the day's free spend, all or nothing:
+    /// refused when the user's pages would pass `limit` or the day's spend would pass `budget`.
+    /// The spend is reserved up front so jobs nobody polls still count against the budget.
+    async fn reserve(
+        &self,
+        user: &str,
+        pages: u32,
+        limit: u32,
+        usd: f64,
+        budget: f64,
+    ) -> Result<Result<u32, Refusal>, ApiError> {
         if budget <= 0.0 {
             return Ok(Err(Refusal::Paused));
         }
+        let usd = if usd.is_finite() { usd.max(0.0) } else { budget };
         match self {
             Quota::Memory(m) => {
                 let mut g = Self::mem(m);
-                if g.spent_usd >= budget {
+                if g.spent_usd >= budget || g.spent_usd + usd > budget {
                     return Ok(Err(Refusal::Budget));
                 }
                 let used = g.users.get(user).copied().unwrap_or(0);
@@ -321,13 +331,15 @@ impl Quota {
                     return Ok(Err(Refusal::Quota { remaining: limit.saturating_sub(used) }));
                 }
                 g.users.insert(user.to_string(), used + pages);
+                g.spent_usd += usd;
                 Ok(Ok(limit - used - pages))
             }
             Quota::Supabase { .. } => {
                 let v = self
                     .rpc(
                         "playground_reserve",
-                        json!({ "p_user": user, "p_pages": pages, "p_day_limit": limit, "p_budget_usd": budget }),
+                        json!({ "p_user": user, "p_pages": pages, "p_day_limit": limit, "p_usd": usd,
+                                "p_budget_usd": budget }),
                     )
                     .await?;
                 let row = v.get(0).cloned().unwrap_or(v);
@@ -343,8 +355,10 @@ impl Quota {
         }
     }
 
-    async fn release(&self, user: &str, pages: u32) {
-        if pages == 0 {
+    /// Give back reserved model-pages and spend (never below zero).
+    async fn release(&self, user: &str, pages: u32, usd: f64) {
+        let usd = if usd.is_finite() { usd.max(0.0) } else { 0.0 };
+        if pages == 0 && usd == 0.0 {
             return;
         }
         match self {
@@ -353,9 +367,10 @@ impl Quota {
                 if let Some(u) = g.users.get_mut(user) {
                     *u = u.saturating_sub(pages);
                 }
+                g.spent_usd = (g.spent_usd - usd).max(0.0);
             }
             Quota::Supabase { .. } => {
-                let _ = self.rpc("playground_release", json!({ "p_user": user, "p_pages": pages })).await;
+                let _ = self.rpc("playground_release", json!({ "p_user": user, "p_pages": pages, "p_usd": usd })).await;
             }
         }
     }
@@ -689,7 +704,8 @@ async fn handle_run(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<Ser
         }
         let need = reserved_per_model.saturating_mul(chosen.len() as u32);
         let limit = pg.cfg.free_model_pages_per_day;
-        match pg.quota.reserve(user, need, limit, pg.cfg.free_daily_budget_usd).await? {
+        let estimate: f64 = chosen.iter().map(|m| estimate_usd(m, reserved_per_model)).sum();
+        match pg.quota.reserve(user, need, limit, estimate, pg.cfg.free_daily_budget_usd).await? {
             Ok(remaining) => usage = json!({ "model_pages_remaining": remaining }),
             Err(Refusal::Quota { remaining }) => {
                 return Err(ApiError::new(
@@ -726,6 +742,11 @@ async fn handle_run(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<Ser
         doc.base_url = d.base_url;
         doc.timeout_secs = state.server.max_timeout_secs.min(SUBMIT_TIMEOUT_SECS);
         doc.max_retries = state.server.max_retries.min(2);
+        if matches!(payer, Payer::Free { .. }) {
+            // The free tier paid for `reserved_per_model` pages: a PDF the counter undercounted
+            // (escaped names, unusual filters) still costs no more than that.
+            doc.pages = Some(format!("1-{reserved_per_model}"));
+        }
         async move {
             creds?;
             puffinparse_core::submit_parse(doc).await.map_err(ApiError::from)
@@ -737,6 +758,8 @@ async fn handle_run(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<Ser
     let retention = i64::try_from(state.server.job_retention_hours.saturating_mul(3600)).unwrap_or(i64::MAX);
     let mut jobs = Vec::with_capacity(chosen.len());
     let mut failed_pages = 0u32;
+    let mut failed_usd = 0.0f64;
+    let free = matches!(payer, Payer::Free { .. });
     for (m, outcome) in chosen.iter().zip(outcomes) {
         match outcome {
             Ok(handle) => {
@@ -755,7 +778,8 @@ async fn handle_run(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<Ser
                     created_unix: now,
                     playground: Some(PlaygroundJob {
                         user,
-                        reserved_pages: if matches!(payer, Payer::Free { .. }) { reserved_per_model } else { 0 },
+                        reserved_pages: if free { reserved_per_model } else { 0 },
+                        reserved_usd: if free { estimate_usd(m, reserved_per_model) } else { 0.0 },
                     }),
                 };
                 state.usage.insert_job(&id, stored, retention);
@@ -764,6 +788,7 @@ async fn handle_run(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<Ser
             }
             Err(e) => {
                 failed_pages += reserved_per_model;
+                failed_usd += estimate_usd(m, reserved_per_model);
                 let e = e.with_request_id(ctx.request_id());
                 jobs.push(json!({ "model": m.id, "id": null, "status": "failed", "error": e.error_object() }));
             }
@@ -771,7 +796,7 @@ async fn handle_run(state: &AppState, ctx: &mut Ctx, req: Request) -> Result<Ser
     }
     if let Payer::Free { user } = &payer {
         if failed_pages > 0 {
-            pg.quota.release(user, failed_pages).await;
+            pg.quota.release(user, failed_pages, failed_usd).await;
             if let Some(r) = usage.get("model_pages_remaining").and_then(Value::as_u64) {
                 usage["model_pages_remaining"] = json!(r + u64::from(failed_pages));
             }
@@ -838,20 +863,29 @@ impl Playground {
     /// After a playground job is first seen terminal: give back the model-pages it did not use and
     /// add its cost to the day's free spend. Runs in the background (it may call Supabase).
     pub(crate) fn settled(self: &Arc<Self>, job: &StoredJob, outcome: JobOutcome, pages: u32, cost_usd: Option<f64>) {
-        let Some(PlaygroundJob { user: Some(user), reserved_pages }) = job.playground.clone() else { return };
+        let Some(PlaygroundJob { user: Some(user), reserved_pages, reserved_usd }) = job.playground.clone() else {
+            return;
+        };
         let price = puffinparse_core::pricing::price_per_page(&job.handle.model, Mode::Parse);
         let pg = Arc::clone(self);
         tokio::spawn(async move {
             match outcome {
                 JobOutcome::Succeeded => {
-                    pg.quota.release(&user, reserved_pages.saturating_sub(pages)).await;
-                    let cost = cost_usd.or_else(|| price.map(|p| p * f64::from(pages)));
-                    pg.quota.charge(cost.unwrap_or(0.0)).await;
+                    // True the reservation up to what the job used and cost.
+                    let cost = cost_usd.or_else(|| price.map(|p| p * f64::from(pages))).unwrap_or(reserved_usd);
+                    let refund = (reserved_usd - cost).max(0.0);
+                    pg.quota.release(&user, reserved_pages.saturating_sub(pages), refund).await;
+                    pg.quota.charge(cost - reserved_usd).await;
                 }
-                JobOutcome::Failed => pg.quota.release(&user, reserved_pages).await,
+                JobOutcome::Failed => pg.quota.release(&user, reserved_pages, reserved_usd).await,
             }
         });
     }
+}
+
+/// The free-tier spend reserved for one model's job: its list price for `pages` pages.
+fn estimate_usd(m: &PgModel, pages: u32) -> f64 {
+    m.price.unwrap_or(0.0) * f64::from(pages)
 }
 
 fn scan_failed() -> ApiError {
@@ -898,12 +932,34 @@ mod tests {
     #[tokio::test]
     async fn memory_counters_reserve_release_and_budget() {
         let q = Quota::memory();
-        assert_eq!(q.reserve("u", 9, 30, 1.0).await.unwrap(), Ok(21));
-        assert_eq!(q.reserve("u", 22, 30, 1.0).await.unwrap(), Err(Refusal::Quota { remaining: 21 }));
-        q.release("u", 4).await;
+        assert_eq!(q.reserve("u", 9, 30, 0.0, 1.0).await.unwrap(), Ok(21));
+        assert_eq!(q.reserve("u", 22, 30, 0.0, 1.0).await.unwrap(), Err(Refusal::Quota { remaining: 21 }));
+        q.release("u", 4, 0.0).await;
         assert_eq!(q.status(Some("u"), 30).await.unwrap().0, 25);
         q.charge(1.0).await;
-        assert_eq!(q.reserve("v", 1, 30, 1.0).await.unwrap(), Err(Refusal::Budget));
-        assert_eq!(q.reserve("v", 1, 30, 0.0).await.unwrap(), Err(Refusal::Paused));
+        assert_eq!(q.reserve("v", 1, 30, 0.0, 1.0).await.unwrap(), Err(Refusal::Budget));
+        assert_eq!(q.reserve("v", 1, 30, 0.0, 0.0).await.unwrap(), Err(Refusal::Paused));
+    }
+
+    /// Spend is reserved at submit time, so runs nobody polls still use up the budget, and a run
+    /// that would pass it is refused before any provider call.
+    #[tokio::test]
+    async fn memory_counters_reserve_spend_up_front() {
+        let q = Quota::memory();
+        assert_eq!(q.reserve("a", 10, 30, 0.75, 2.0).await.unwrap(), Ok(20));
+        assert_eq!(q.reserve("b", 10, 30, 0.75, 2.0).await.unwrap(), Ok(20));
+        assert_eq!(q.status(None, 30).await.unwrap().1, 1.5);
+        // 1.5 + 0.75 would pass $2: refused, and nothing is reserved for "c".
+        assert_eq!(q.reserve("c", 10, 30, 0.75, 2.0).await.unwrap(), Err(Refusal::Budget));
+        assert_eq!(q.status(Some("c"), 30).await.unwrap(), (30, 1.5));
+        // A failed job gives its pages and spend back; a cheaper success refunds the difference.
+        q.release("a", 10, 0.75).await;
+        assert_eq!(q.status(Some("a"), 30).await.unwrap(), (30, 0.75));
+        assert_eq!(q.reserve("c", 10, 30, 0.75, 2.0).await.unwrap(), Ok(20));
+        q.release("c", 0, 0.5).await;
+        assert_eq!(q.status(None, 30).await.unwrap().1, 1.0);
+        // Never below zero.
+        q.release("c", 0, 99.0).await;
+        assert_eq!(q.status(None, 30).await.unwrap().1, 0.0);
     }
 }

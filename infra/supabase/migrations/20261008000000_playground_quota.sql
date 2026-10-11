@@ -29,11 +29,18 @@ alter table playground.budget_day enable row level security;
 -- No policies: with RLS on and no policy, only the table owner and service_role see rows.
 revoke all on all tables in schema playground from public, anon, authenticated;
 
--- Reserve `pages` model-pages for a user today, all-or-nothing, unless that would pass `day_limit`
--- or today's free spend has reached `budget_usd`. One statement, so concurrent runs cannot both
--- squeeze under the limit. Returns the outcome and what the user has left.
+-- Earlier drafts of these two functions had other signatures; drop them so only the current
+-- ones exist (create or replace with new arguments would add an overload instead).
+drop function if exists public.playground_reserve(uuid, integer, integer, numeric);
+drop function if exists public.playground_release(uuid, integer);
+
+-- Reserve `pages` model-pages for a user and `usd` of today's free spend, all-or-nothing:
+-- refused when the user's pages would pass `day_limit` or today's spend would pass `budget_usd`.
+-- The spend is reserved at submit time (list price x pages) and trued up when the job finishes,
+-- so jobs nobody polls still count. Today's budget row is locked first, so concurrent runs queue
+-- here instead of both squeezing under the limit. Returns the outcome and what the user has left.
 create or replace function public.playground_reserve(
-  p_user uuid, p_pages integer, p_day_limit integer, p_budget_usd numeric
+  p_user uuid, p_pages integer, p_day_limit integer, p_usd numeric, p_budget_usd numeric
 ) returns table (ok boolean, reason text, remaining integer)
 language plpgsql
 security definer
@@ -44,11 +51,12 @@ declare
   used integer;
   spent numeric;
 begin
-  if p_pages <= 0 or p_day_limit < 0 then
+  if p_pages <= 0 or p_day_limit < 0 or p_usd < 0 then
     raise exception 'invalid arguments';
   end if;
-  select b.spent_usd into spent from playground.budget_day b where b.day = today;
-  if p_budget_usd <= 0 or coalesce(spent, 0) >= p_budget_usd then
+  insert into playground.budget_day (day) values (today) on conflict (day) do nothing;
+  select b.spent_usd into spent from playground.budget_day b where b.day = today for update;
+  if p_budget_usd <= 0 or spent >= p_budget_usd or spent + p_usd > p_budget_usd then
     select u.model_pages into used from playground.user_day u where u.user_id = p_user and u.day = today;
     return query select false, case when p_budget_usd <= 0 then 'paused' else 'budget_exhausted' end,
       greatest(p_day_limit - coalesce(used, 0), 0);
@@ -68,12 +76,14 @@ begin
     return query select false, 'quota_exceeded', greatest(p_day_limit - coalesce(used, 0), 0);
     return;
   end if;
+  update playground.budget_day b set spent_usd = b.spent_usd + p_usd where b.day = today;
   return query select true, null::text, p_day_limit - used;
 end;
 $$;
 
--- Give back model-pages reserved for jobs whose submit failed (never below zero).
-create or replace function public.playground_release(p_user uuid, p_pages integer)
+-- Give back model-pages and spend reserved for jobs that failed, or the part a finished job did
+-- not use (never below zero).
+create or replace function public.playground_release(p_user uuid, p_pages integer, p_usd numeric)
 returns void
 language sql
 security definer
@@ -82,9 +92,12 @@ as $$
   update playground.user_day u
      set model_pages = greatest(u.model_pages - greatest(p_pages, 0), 0)
    where u.user_id = p_user and u.day = (now() at time zone 'utc')::date;
+  update playground.budget_day b
+     set spent_usd = greatest(b.spent_usd - greatest(p_usd, 0), 0)
+   where b.day = (now() at time zone 'utc')::date;
 $$;
 
--- Add a succeeded free-tier job's cost to today's spend.
+-- Add what a succeeded free-tier job cost beyond its reservation to today's spend.
 create or replace function public.playground_charge(p_usd numeric)
 returns numeric
 language sql
@@ -112,12 +125,12 @@ as $$
                     where b.day = (now() at time zone 'utc')::date), 0);
 $$;
 
-revoke all on function public.playground_reserve(uuid, integer, integer, numeric) from public, anon, authenticated;
-revoke all on function public.playground_release(uuid, integer) from public, anon, authenticated;
+revoke all on function public.playground_reserve(uuid, integer, integer, numeric, numeric) from public, anon, authenticated;
+revoke all on function public.playground_release(uuid, integer, numeric) from public, anon, authenticated;
 revoke all on function public.playground_charge(numeric) from public, anon, authenticated;
 revoke all on function public.playground_status(uuid, integer) from public, anon, authenticated;
-grant execute on function public.playground_reserve(uuid, integer, integer, numeric) to service_role;
-grant execute on function public.playground_release(uuid, integer) to service_role;
+grant execute on function public.playground_reserve(uuid, integer, integer, numeric, numeric) to service_role;
+grant execute on function public.playground_release(uuid, integer, numeric) to service_role;
 grant execute on function public.playground_charge(numeric) to service_role;
 grant execute on function public.playground_status(uuid, integer) to service_role;
 

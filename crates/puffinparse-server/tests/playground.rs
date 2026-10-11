@@ -27,6 +27,8 @@ struct Mock {
     job_polls: Mutex<HashMap<String, usize>>,
     /// `Authorization` of every Reducto call.
     reducto_auth: Mutex<Vec<String>>,
+    /// Body of every Reducto `parse_async` submit.
+    reducto_bodies: Mutex<Vec<Value>>,
     turnstile_calls: AtomicUsize,
     /// Supabase RPC: calls (name, body, apikey, authorization) and the counters it keeps.
     rpc_calls: Mutex<Vec<(String, Value, String, String)>>,
@@ -45,8 +47,9 @@ async fn mock() -> (String, Arc<Mock>) {
         .route("/rd/upload", post(|| async { axum::Json(json!({ "file_id": "reducto://file-1" })) }))
         .route(
             "/rd/parse_async",
-            post(move |h: HeaderMap| async move {
+            post(move |h: HeaderMap, axum::Json(v): axum::Json<Value>| async move {
                 a.reducto_auth.lock().unwrap().push(auth_of(&h));
+                a.reducto_bodies.lock().unwrap().push(v);
                 let n = a.job_seq.fetch_add(1, Ordering::SeqCst) + 1;
                 axum::Json(json!({ "job_id": format!("rj-{n}") }))
             }),
@@ -322,6 +325,25 @@ async fn app_and_issuer(extra: &str, supabase: &str) -> (axum::Router, Arc<Mock>
     (puffinparse_server::app(Arc::new(state)), m, issuer(&base))
 }
 
+/// A free-tier job is limited to the pages that were reserved for it, so a PDF the gateway
+/// undercounted cannot run more pages on the gateway's key; an own-key job is not limited.
+#[tokio::test]
+async fn free_tier_jobs_are_capped_to_the_reserved_pages() {
+    let (app, m, iss) = app_and_issuer("", "").await;
+    let bearer = format!("Bearer {}", token(USER_A, &iss));
+    let (s, _, _, text) =
+        send(&app, run_req(form(PNG, &["reducto/r-1"], Some("good-token")), &[("authorization", bearer.as_str())]))
+            .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{text}");
+    let key = [("x-provider-key-reducto", "user-reducto-key")];
+    let (s, _, _, text) = send(&app, run_req(form(PNG, &["reducto/standard"], None), &key)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{text}");
+    let bodies = m.reducto_bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[0]["settings"]["page_range"], json!([{ "start": 1, "end": 1 }]), "{}", bodies[0]);
+    assert!(bodies[1]["settings"].get("page_range").is_none(), "{}", bodies[1]);
+}
+
 #[tokio::test]
 async fn own_key_run_uses_only_the_callers_key_and_only_it_can_poll() {
     let (app, m, _) = app_and_issuer("", "").await;
@@ -423,28 +445,27 @@ async fn free_run_reserves_pages_checks_turnstile_and_settles() {
 
 #[tokio::test]
 async fn free_spend_is_capped_per_day() {
-    // A budget smaller than one page of reducto/r-1: the first success uses it up.
+    // reducto/r-1 lists at $0.01/page. A $0.005 budget cannot cover one page: refused up front.
     let (app, _, iss) = app_and_issuer("free_daily_budget_usd = 0.005", "").await;
     let bearer = format!("Bearer {}", token(USER_A, &iss));
     let auth = [("authorization", bearer.as_str())];
-    let (s, _, run, _) = send(&app, run_req(form(PNG, &["reducto/r-1"], Some("good-token")), &auth)).await;
+    let (s, _, e, _) = send(&app, run_req(form(PNG, &["reducto/r-1"], Some("good-token")), &auth)).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(e["error"]["details"]["reason"], "budget_exhausted");
+
+    // $0.015 covers one run. The spend is reserved at submit time, so a second run is refused
+    // even though nobody has polled the first job (which is how it was bypassed before).
+    let (app, _, iss) = app_and_issuer("free_daily_budget_usd = 0.015", "").await;
+    let bearer = format!("Bearer {}", token(USER_A, &iss));
+    let auth = [("authorization", bearer.as_str())];
+    let (s, _, _, _) = send(&app, run_req(form(PNG, &["reducto/r-1"], Some("good-token")), &auth)).await;
     assert_eq!(s, StatusCode::ACCEPTED);
-    let path = format!("/v1/jobs/{}", run["jobs"][0]["id"].as_str().unwrap());
-    send(&app, get_with(&path, &auth)).await;
-    assert_eq!(send(&app, get_with(&path, &auth)).await.2["status"], "succeeded");
-    // The charge runs in the background.
-    for _ in 0..50 {
-        let c = send(&app, get_with("/v1/playground/config", &[])).await.2;
-        if c["free_tier"]["available"] == false {
-            assert_eq!(c["free_tier"]["reason"], "budget_exhausted");
-            let (s, _, e, _) = send(&app, run_req(form(PNG, &["reducto/r-1"], Some("good-token")), &auth)).await;
-            assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
-            assert_eq!(e["error"]["details"]["reason"], "budget_exhausted");
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    panic!("the free spend was never charged");
+    let other = format!("Bearer {}", token(USER_B, &iss));
+    let (s, _, e, _) =
+        send(&app, run_req(form(PNG, &["reducto/r-1"], Some("good-token")), &[("authorization", other.as_str())]))
+            .await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{e}");
+    assert_eq!(e["error"]["details"]["reason"], "budget_exhausted");
 }
 
 #[tokio::test]
@@ -457,18 +478,14 @@ async fn supabase_counters_are_used_when_a_service_key_is_set() {
     assert_eq!(run["usage"]["model_pages_remaining"], 4);
     let path = format!("/v1/jobs/{}", run["jobs"][0]["id"].as_str().unwrap());
     send(&app, get_with(&path, &auth)).await;
-    send(&app, get_with(&path, &auth)).await;
-    for _ in 0..50 {
-        if m.rpc_calls.lock().unwrap().iter().any(|c| c.0 == "playground_charge") {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    assert_eq!(send(&app, get_with(&path, &auth)).await.2["status"], "succeeded");
     let calls = m.rpc_calls.lock().unwrap().clone();
     let reserve = calls.iter().find(|c| c.0 == "playground_reserve").expect("reserved");
-    assert_eq!(reserve.1, json!({ "p_user": USER_A, "p_pages": 1, "p_day_limit": 5, "p_budget_usd": 1.0 }));
-    let charge = calls.iter().find(|c| c.0 == "playground_charge").expect("charged");
-    assert!((charge.1["p_usd"].as_f64().unwrap() - 0.01).abs() < 1e-9, "{charge:?}");
+    // The list-price estimate ($0.01 x 1 page) is reserved with the pages, in one call.
+    assert_eq!(reserve.1["p_pages"], 1);
+    assert_eq!(reserve.1["p_day_limit"], 5);
+    assert_eq!(reserve.1["p_budget_usd"], 1.0);
+    assert!((reserve.1["p_usd"].as_f64().unwrap() - 0.01).abs() < 1e-9, "{reserve:?}");
     // The new-style secret key goes in `apikey` only, never as a bearer.
     assert!(calls.iter().all(|c| c.2 == "sb_secret_test" && c.3.is_empty()), "{calls:?}");
 }

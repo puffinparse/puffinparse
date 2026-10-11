@@ -286,11 +286,14 @@ one core `submit_parse` per model, stored as a gateway job, and the browser poll
 
 - **Free tier**: `Authorization: Bearer <Supabase access token>` (GitHub or email sign-in on the
   page) plus a Cloudflare Turnstile token. The gateway's own provider keys pay, so a run first
-  reserves `pages x models` of the user's daily model-pages (`free_model_pages_per_day`; released
-  if a submit fails, trued up to the provider's page count on success), the day's free spend must
-  be under `free_daily_budget_usd` (each job's cost is added once, on its first success), and only
-  models priced at or under `free_tier_max_price_per_page` are offered. A PDF whose pages the
-  gateway cannot count is refused on the free tier.
+  reserves, in one atomic step, `pages x models` of the user's daily model-pages
+  (`free_model_pages_per_day`) and the run's list-price cost from the day's free spend
+  (`free_daily_budget_usd`); a run that would pass either is refused before any provider call.
+  Both are given back if a submit or job fails and trued up to the provider's page count and cost
+  on success, so jobs nobody polls still count. Only models priced at or under
+  `free_tier_max_price_per_page` are offered, and each job asks the provider for the reserved
+  page range only (`1-N`), so a PDF the gateway undercounts cannot cost more. A PDF whose pages
+  the gateway cannot count is refused on the free tier.
 - **Your own keys**: one `x-provider-key-<provider>` header per provider (`reducto`, `extend`,
   `llamaparse`, `opendocrouter`) and no `Authorization` header. The key goes to that provider for
   this request and its polls only; the gateway never falls back to its own key for such a run. The
@@ -346,7 +349,7 @@ for `ip_rpm` is the connection's address, or with `trust_forwarded_for = N` the 
 for a valid bearer. **`POST /v1/playground/runs`** is multipart: `file` (PDF, PNG or JPEG, checked
 by magic bytes; providers get a generic filename, never the user's), `models` (repeated, 1 to
 `max_models`, distinct), and `turnstile_token` on the free tier. The gateway counts the pages,
-reserves model-pages (free tier), submits one job per model concurrently and answers **202**:
+reserves model-pages and spend (free tier), submits one job per model concurrently and answers **202**:
 
 ```json
 {"id": "pgrun_…", "object": "playground_run", "mode": "free" | "byok", "pages": 2,

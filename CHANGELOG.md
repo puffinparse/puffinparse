@@ -24,7 +24,8 @@ Python package `puffinparse` share a single version. Entries before the rename s
   `POST /v1/playground/runs`, one async job per model, polled through `GET /v1/jobs/{id}` by the
   same signed-in user or the same provider key only. The free tier verifies Supabase access tokens
   (JWKS, or HS256 with a legacy secret), requires Turnstile, reserves the user's daily model-pages
-  (counted by the gateway, compressed PDF object streams included) and caps the day's spend; own
+  (counted by the gateway, compressed PDF object streams included) and the run's estimated cost
+  against the day's spend cap, both at submit time, and limits each job to the reserved pages; own
   keys arrive as `x-provider-key-<provider>` and are never stored or logged. Per-IP run limits,
   per-owner poll limits, CORS for the configured origins on those routes only, and error bodies may
   now carry `details`. A Cloud Run service and config are in `deploy/cloudrun/`.

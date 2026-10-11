@@ -60,6 +60,10 @@ pub struct PlaygroundJob {
     /// Model-pages reserved at submit time (released on failure, trued up on success).
     #[serde(default)]
     pub reserved_pages: u32,
+    /// Free-tier spend reserved at submit time: list price x reserved pages (refunded on failure,
+    /// trued up to the job's cost on success).
+    #[serde(default)]
+    pub reserved_usd: f64,
 }
 
 /// Owners of playground jobs start with this; they are not virtual keys.
