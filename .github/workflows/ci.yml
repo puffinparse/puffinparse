@@ -39,6 +39,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Needs `cargo metadata` and the registry sources, hence here. Fails when Cargo.lock changed
+      # without regenerating THIRD_PARTY_NOTICES.md, or a bundled crate has no licence text
+      # (add it under licenses/extra/, see the README there).
+      - name: Third-party notices are current
+        run: python3 scripts/third_party_notices.py --check
+
       # Live provider tests are `#[ignore]`d and/or skip themselves when
       # REDUCTO_API_KEY / EXTEND_API_KEY / LLAMA_API_KEY are absent, so CI
       # deliberately sets no provider secrets: this run is offline.
@@ -191,6 +197,14 @@ jobs:
         run: docker build -t puffinparse:ci .
       - name: CLI runs in the image
         run: docker run --rm puffinparse:ci --version
+      - name: Licence files are in the image
+        run: |
+          id=$(docker create puffinparse:ci)
+          docker cp "$id:/usr/share/doc/puffinparse" "$RUNNER_TEMP/licences"
+          docker rm "$id"
+          for f in LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.txt; do
+            test -s "$RUNNER_TEMP/licences/$f" || { echo "image lacks $f"; exit 1; }
+          done
       - name: Gateway serves /health and /v1/models
         run: |
           printf '[server]\nport = 4000\n' > "$RUNNER_TEMP/puffinparse.toml"

@@ -6,6 +6,9 @@ name: Release
 #   crates.io puffinparse-core, -server, -cli    (trusted publishing, environment `crates-io`)
 #   GHCR      ghcr.io/ajinkyashejul/puffinparse  (GITHUB_TOKEN, `packages: write`)
 #   GitHub    Release with CLI archives, wheels, sdist and SHA256SUMS
+# Every artifact carries LICENSE, THIRD_PARTY_NOTICES.md and THIRD_PARTY_LICENSES.txt (the licence
+# texts of every bundled crate, built once by the `notices` job); scripts/check_release_licenses.py
+# fails the build when one is missing.
 # No long-lived registry token is stored anywhere. One-time registry setup: docs/RELEASING.md.
 # npm and crates.io are opt-in via the repository variables PUBLISH_NPM / PUBLISH_CRATES = true.
 #
@@ -48,11 +51,34 @@ jobs:
             test "${GITHUB_REF_NAME#v}" = "$cargo_v" || { echo "tag $GITHUB_REF_NAME != $cargo_v"; exit 1; }
           fi
 
+  # --------------------------------------------------------------- notices --
+  # One copy of the full third-party licence texts, downloaded by every job that packages a binary.
+  notices:
+    name: Third-party licence texts
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: THIRD_PARTY_NOTICES.md is current and every crate has a licence text
+        run: python3 scripts/third_party_notices.py --check
+
+      - name: Collect the licence texts
+        run: python3 scripts/third_party_notices.py --full THIRD_PARTY_LICENSES.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: third-party-licenses
+          path: THIRD_PARTY_LICENSES.txt
+          if-no-files-found: error
+
   # ---------------------------------------------------------------- wheels --
+  # pyproject.toml `license-files` puts LICENSE and THIRD_PARTY_* into each wheel's
+  # .dist-info/licenses/ and into the sdist.
   # One abi3 wheel per platform (pyo3 `abi3-py39`): it installs on CPython 3.9 and newer.
   linux:
     name: Wheel · linux-${{ matrix.target }}
-    needs: version
+    needs: [version, notices]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -65,6 +91,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Fetch THIRD_PARTY_LICENSES.txt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-licenses
+
       # manylinux_2_28: aws-lc-sys (rustls' crypto backend) needs a newer GCC than manylinux2014's.
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
@@ -74,6 +105,9 @@ jobs:
           args: --release --out dist
           sccache: "true"
 
+      - name: Wheel carries the licence files
+        run: python scripts/check_release_licenses.py dist/*.whl
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheels-linux-${{ matrix.target }}
@@ -82,7 +116,7 @@ jobs:
 
   macos:
     name: Wheel · macos-${{ matrix.target }}
-    needs: version
+    needs: [version, notices]
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -95,12 +129,20 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Fetch THIRD_PARTY_LICENSES.txt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-licenses
+
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
           sccache: "true"
+
+      - name: Wheel carries the licence files
+        run: python scripts/check_release_licenses.py dist/*.whl
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -110,7 +152,7 @@ jobs:
 
   windows:
     name: Wheel · windows-x64
-    needs: version
+    needs: [version, notices]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -120,12 +162,20 @@ jobs:
           python-version: "3.12"
           architecture: x64
 
+      - name: Fetch THIRD_PARTY_LICENSES.txt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-licenses
+
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: x64
           args: --release --out dist
           sccache: "true"
+
+      - name: Wheel carries the licence files
+        run: python scripts/check_release_licenses.py dist/*.whl
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -135,10 +185,15 @@ jobs:
 
   sdist:
     name: Source distribution
-    needs: version
+    needs: [version, notices]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Fetch THIRD_PARTY_LICENSES.txt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-licenses
 
       - name: Build sdist
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
@@ -149,6 +204,9 @@ jobs:
       - name: Check metadata
         run: pipx run twine check --strict dist/*
 
+      - name: Sdist carries the licence files
+        run: python3 scripts/check_release_licenses.py dist/*.tar.gz
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheels-sdist
@@ -157,9 +215,11 @@ jobs:
 
   # ------------------------------------------------------------ CLI binaries --
   # Linux builds run on Ubuntu 22.04 so the binaries need glibc 2.35, not the newest runner's.
+  # Each archive holds the binary plus LICENSE, THIRD_PARTY_NOTICES.md and THIRD_PARTY_LICENSES.txt,
+  # side by side at the top level (no directory), so `./puffinparse` works right after extracting.
   cli:
     name: CLI · ${{ matrix.target }}
-    needs: version
+    needs: [version, notices]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -193,6 +253,15 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Fetch THIRD_PARTY_LICENSES.txt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-licenses
+
       - name: Build CLI
         run: cargo build -p puffinparse-cli --release --locked --target ${{ matrix.target }}
 
@@ -200,17 +269,24 @@ jobs:
         if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
-          mkdir -p dist
-          tar -czf "dist/puffinparse-${{ matrix.target }}.tar.gz" \
-            -C "target/${{ matrix.target }}/release" puffinparse
+          mkdir -p dist stage
+          cp "target/${{ matrix.target }}/release/puffinparse" \
+            LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.txt stage/
+          tar -czf "dist/puffinparse-${{ matrix.target }}.tar.gz" -C stage \
+            puffinparse LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.txt
 
       - name: Archive (zip)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path "target/${{ matrix.target }}/release/puffinparse.exe" `
-            -DestinationPath "dist/puffinparse-${{ matrix.target }}.zip"
+          New-Item -ItemType Directory -Force -Path dist, stage | Out-Null
+          Copy-Item -Destination stage -Path "target/${{ matrix.target }}/release/puffinparse.exe", `
+            "LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.txt"
+          Compress-Archive -Path stage/* -DestinationPath "dist/puffinparse-${{ matrix.target }}.zip"
+
+      - name: Archive carries the licence files
+        shell: bash
+        run: python scripts/check_release_licenses.py dist/*
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -292,15 +368,38 @@ jobs:
           if-no-files-found: error
 
   # -------------------------------------------------------------- GHCR image --
+  # linux/amd64 and linux/arm64, each built natively on its own runner (ubuntu-24.04 and the
+  # GitHub-hosted arm64 runner ubuntu-24.04-arm), then joined into one multi-arch tag by
+  # `docker-manifest`. Not QEMU: emulating a full release build of the Rust workspace (aws-lc-sys
+  # and ring compile C and assembly) takes many times longer and is the flakiest part of
+  # multi-arch builds. Not cross-compilation in the Dockerfile: it would need a cross C toolchain
+  # for aws-lc-sys and a different build path per architecture, while the native jobs run the same
+  # Dockerfile `docker build` uses locally and can smoke-test the image they built.
+  # Each job pushes its image by digest only (on a tag); the manifest job adds the tags.
   docker:
-    name: Gateway image (ghcr.io)
+    name: Gateway image · ${{ matrix.platform }}
     needs: version
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Platform slug
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
@@ -312,34 +411,132 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # On v0.1.0: 0.1.0, 0.1 and latest (pre-releases like v0.2.0-rc.1 do not move latest).
-      - name: Image tags
+      - name: Image labels
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.title=PuffinParse gateway
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.url=https://puffinparse.com
+
+      - name: Build (loaded locally for the smoke test)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: puffinparse:smoke
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=image-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=image-${{ env.PLATFORM_PAIR }}
+
+      - name: Smoke test (CLI runs, licence files are in the image)
+        run: |
+          docker run --rm puffinparse:smoke --version
+          id=$(docker create puffinparse:smoke)
+          docker cp "$id:/usr/share/doc/puffinparse" "$RUNNER_TEMP/licences"
+          docker rm "$id"
+          ls -l "$RUNNER_TEMP/licences"
+          for f in LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.txt; do
+            test -s "$RUNNER_TEMP/licences/$f" || { echo "image lacks $f"; exit 1; }
+          done
+
+      # Same inputs as the build above, so every layer comes from the builder's cache.
+      - name: Push by digest
+        id: push
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=image-${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-manifest:
+    name: Gateway image (multi-arch tags)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: digests-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # On v0.1.0: 0.1.0, 0.1 and latest (pre-releases like v0.2.0-rc.1 do not move latest).
+      # The labels become annotations on the manifest list, which is what GHCR displays.
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ${{ env.IMAGE }}
           flavor: |
             latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
             type=sha
           labels: |
             org.opencontainers.image.title=PuffinParse gateway
             org.opencontainers.image.licenses=MIT
             org.opencontainers.image.url=https://puffinparse.com
 
-      - name: Build (and push on a tag)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          platforms: linux/amd64
-          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create the multi-arch manifest list and push the tags
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          digests=(*)
+          printf '%s\n' "${digests[@]}"
+          test "${#digests[@]}" -eq 2 || { echo "expected 2 platform digests"; exit 1; }
+          args=()
+          while IFS= read -r tag; do args+=(-t "$tag"); done \
+            < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          while IFS= read -r note; do args+=(--annotation "$note"); done \
+            < <(jq -r '.annotations[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          refs=()
+          for digest in "${digests[@]}"; do refs+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create "${args[@]}" "${refs[@]}"
+
+      - name: Inspect
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE:$VERSION"
 
   # ===================================================== publish (tags only) ==
   # Every registry job waits for every build, so a broken target publishes nothing.
@@ -410,9 +607,16 @@ jobs:
           name: node-loader
           path: js
 
+      - name: Fetch THIRD_PARTY_LICENSES.txt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: third-party-licenses
+
       # napi-rs v3 layout: one package per platform (`puffinparse-<platform>`, created under
       # npm/<platform>/) listed as optionalDependencies of `puffinparse`; npm installs only the one
       # matching the user's os/cpu/libc. `napi artifacts` fails if any target's binary is missing.
+      # Every package, the platform ones above all (they hold the compiled addon), ships LICENSE,
+      # THIRD_PARTY_NOTICES.md and THIRD_PARTY_LICENSES.txt; js/package.json lists them in `files`.
       - name: Assemble platform packages
         run: |
           npx napi create-npm-dirs
@@ -420,16 +624,30 @@ jobs:
           rm -f ./*.node
           node -e '
             const fs = require("fs");
+            const licences = ["LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.txt"];
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
             pkg.optionalDependencies = {};
+            for (const f of licences) fs.copyFileSync(`../${f}`, f);
             for (const dir of fs.readdirSync("npm")) {
-              const sub = JSON.parse(fs.readFileSync(`npm/${dir}/package.json`, "utf8"));
+              const path = `npm/${dir}/package.json`;
+              const sub = JSON.parse(fs.readFileSync(path, "utf8"));
               pkg.optionalDependencies[sub.name] = sub.version;
+              for (const f of licences) fs.copyFileSync(`../${f}`, `npm/${dir}/${f}`);
+              sub.files = [...new Set([...(sub.files || []), ...licences])];
+              fs.writeFileSync(path, JSON.stringify(sub, null, 2) + "\n");
             }
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
             console.log(pkg.optionalDependencies);
           '
           ls -l npm/*
+
+      - name: Every package carries the licence files
+        run: |
+          mkdir -p "$RUNNER_TEMP/tarballs"
+          for dir in npm/* .; do
+            npm pack "./$dir" --pack-destination "$RUNNER_TEMP/tarballs" >/dev/null
+          done
+          python3 ../scripts/check_release_licenses.py "$RUNNER_TEMP"/tarballs/*.tgz
 
       - name: Publish platform packages, then puffinparse
         run: |
@@ -495,10 +713,10 @@ jobs:
     if: >-
       !cancelled() && startsWith(github.ref, 'refs/tags/v')
       && needs.cli.result == 'success' && needs.pypi.result == 'success'
-      && needs.docker.result == 'success'
+      && needs.docker-manifest.result == 'success'
       && contains(fromJSON('["success", "skipped"]'), needs.npm.result)
       && contains(fromJSON('["success", "skipped"]'), needs.crates-io.result)
-    needs: [cli, pypi, npm, crates-io, docker]
+    needs: [cli, pypi, npm, crates-io, docker-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -528,7 +746,9 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           body: |
-            Install with `pip install puffinparse`, `docker pull --platform linux/amd64 ghcr.io/${{ github.repository }}:latest`,
-            or one of the CLI archives below (on macOS: `xattr -d com.apple.quarantine ./puffinparse` once)
-            (checksums in `SHA256SUMS`). What changed: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
+            Install with `pip install puffinparse`, `docker pull ghcr.io/${{ github.repository }}:latest`
+            (linux/amd64 and linux/arm64), or one of the CLI archives below (on macOS:
+            `xattr -d com.apple.quarantine ./puffinparse` once) (checksums in `SHA256SUMS`). Every
+            archive, wheel, npm package and the image (`/usr/share/doc/puffinparse/`) includes `LICENSE`,
+            `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LICENSES.txt`. What changed: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
           files: release/*

@@ -36,3 +36,5 @@ website/dist/
 # Provider outputs for research-only sources (OmniDocBench) are never committed; their scores are
 # kept in the result JSON and re-scored with `bench rescore --keep-missing` (ADR-16).
 benchmark/results/outputs/*/*/omnidocbench/
+# Full third-party licence texts: generated for release artifacts by scripts/third_party_notices.py --full
+/THIRD_PARTY_LICENSES.txt

@@ -30,9 +30,10 @@ test-python: ## pytest (requires `make develop` first)
 test-node: ## Build the Node addon (debug) and run the js/ test suite
 	cd js && npm ci && npm run build:debug && npm run typecheck && npm test
 
-lint: ## fmt check, clippy, ruff, mypy — everything CI enforces
+lint: ## fmt check, clippy, notices, ruff, mypy — everything CI enforces
 	$(CARGO) fmt --all --check
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
+	$(PYTHON) scripts/third_party_notices.py --check
 	ruff check python/ benchmark/ examples/
 	ruff format --check python/ benchmark/ examples/
 	mypy python/puffinparse

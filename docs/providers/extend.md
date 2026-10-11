@@ -57,7 +57,7 @@ x-extend-workspace-id: <provider_options.workspace_id>      # only when supplied
 
    ```json
    {
-     "file": { "id": "file_bJ2ZXxacw7o206UnS6eR0" },
+     "file": { "id": "file_FAKEparseFile00000001" },
      "config": {
        "target": "markdown",
        "chunkingStrategy": { "type": "page" },
@@ -144,8 +144,8 @@ block shown; the file holds 2 pages, 5 blocks and 21 OCR words):
 ```json
 {
   "object": "parse_run",
-  "id": "pr_xi5wEyAbYlYVBDDy8QDRg",
-  "file": { "object": "file", "id": "file_bJ2ZXxacw7o206UnS6eR0", "name": "test_multi.pdf",
+  "id": "pr_FAKEparseRun000000001",
+  "file": { "object": "file", "id": "file_FAKEparseFile00000001", "name": "test_multi.pdf",
             "type": "PDF", "parentFileId": null, "metadata": { "pageCount": 2 },
             "dataRetention": { "mode": "workspace_default", "status": "available" },
             "createdAt": "2026-09-11T07:18:23.026Z", "updatedAt": "2026-09-11T07:18:37.514Z" },
@@ -186,7 +186,7 @@ block shown; the file holds 2 pages, 5 blocks and 21 OCR words):
               "blockOptions": { "tables": { "targetFormat": "markdown" }, "figures": { "enabled": true } } },
   "batchId": null,
   "usage": { "credits": 4, "totalCredits": 4,
-             "breakdown": [ { "object": "parse_run", "id": "pr_xi5wEyAbYlYVBDDy8QDRg", "credits": 4,
+             "breakdown": [ { "object": "parse_run", "id": "pr_FAKEparseRun000000001", "credits": 4,
                               "charges": [ { "product": "parse_performance", "unit": "page",
                                              "quantity": 2, "credits": 4 } ] } ] }
 }
@@ -270,7 +270,7 @@ Trimmed real response (`crates/puffinparse-core/tests/fixtures/extend_extract_ru
 ```json
 {
   "object": "extract_run",
-  "id": "exr_TR4bUO18s2EjPzeLNB5vy",
+  "id": "exr_FAKEextractRun0000001",
   "status": "PROCESSED",
   "output": {
     "value": { "invoice_number": "INV-9865", "total": "$14,667.43", "vendor": "Cedar Ridge Supply",
@@ -281,7 +281,7 @@ Trimmed real response (`crates/puffinparse-core/tests/fixtures/extend_extract_ru
         "logprobsConfidence": null,
         "reviewAgentScore": null,
         "citations": [
-          { "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+          { "fileId": "file_FAKEextractFile000001",
             "page": { "number": 1, "width": 1240, "height": 1754 },
             "referenceText": "Invoice #: INV-9865",
             "polygon": [ { "x": 78, "y": 468 }, { "x": 310, "y": 467 },
@@ -291,7 +291,7 @@ Trimmed real response (`crates/puffinparse-core/tests/fixtures/extend_extract_ru
       "line_items[0].amount": { "…": "…" }
     }
   },
-  "parseRunId": "pr_q0b8az3CAWPoSbWGUk7RO",
+  "parseRunId": "pr_FAKEextractParse00001",
   "usage": { "credits": 3, "totalCredits": 3,
              "breakdown": [ { "object": "extract_run", "credits": 3,
                               "charges": [ { "product": "extraction_performance", "unit": "page",

@@ -1,7 +1,7 @@
 {
-  "file_input": "baab7fe0-7a85-42fd-bc6b-5efedf98778e",
-  "id": "ext-k3hxt8ewyhh8hpia5nichfdymixa",
-  "project_id": "e513b9ea-b1e8-408e-b612-d91cae45df7e",
+  "file_input": "00000000-0000-4000-8000-0000000000b2",
+  "id": "ext-fakeextractjob00000000000001",
+  "project_id": "00000000-0000-4000-8000-0000000000b1",
   "configuration_id": null,
   "configuration": null,
   "status": "COMPLETED",
@@ -147,7 +147,7 @@
       "page_metadata": null,
       "row_metadata": null
     },
-    "parse_job_id": "pjb-y7hury0bogx6a1wilw6mwkdousg5",
+    "parse_job_id": "pjb-fakeparsejob0000000000000001",
     "parse_tier": "agentic"
   },
   "metadata": null,
@@ -158,5 +158,5 @@
   },
   "created_at": "2026-09-11T09:00:31.892912Z",
   "updated_at": "2026-09-11T09:00:54.257044Z",
-  "document_input_value": "baab7fe0-7a85-42fd-bc6b-5efedf98778e"
+  "document_input_value": "00000000-0000-4000-8000-0000000000b2"
 }

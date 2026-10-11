@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.5,<2.0"]
+requires = ["maturin>=1.9.3,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -7,14 +7,17 @@ name = "puffinparse"
 version = "0.1.6"
 description = "One API for every OCR / document-parsing provider (Reducto, Extend, LlamaParse, ...). Rust core, Python SDK, open benchmark."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+# PEP 639: copied into the wheel's .dist-info/licenses/ and into the sdist. The glob also picks up
+# THIRD_PARTY_LICENSES.txt (every bundled crate's licence text), which the release workflow generates
+# with `scripts/third_party_notices.py --full` before building.
+license-files = ["LICENSE", "THIRD_PARTY_*"]
 requires-python = ">=3.9"
 authors = [{ name = "PuffinParse contributors" }]
 keywords = ["ocr", "document-parsing", "pdf", "reducto", "extend", "llamaparse", "benchmark"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Rust",
@@ -25,7 +28,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.8", "maturin>=1.5"]
+dev = ["pytest>=7", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.8", "maturin>=1.9.3"]
 bench = ["pillow>=10"]
 
 [project.urls]
@@ -41,8 +44,6 @@ python-source = "python"
 module-name = "puffinparse._core"
 features = ["pyo3/extension-module"]
 strip = true
-# The sdist is assembled from the binding crate; ship the repo-root LICENSE its metadata names.
-include = [{ path = "LICENSE", format = "sdist" }]
 
 [tool.ruff]
 line-length = 110

@@ -62,8 +62,15 @@ dependency you introduced.
   a vulnerability — please report it.
 - Document bytes are sent only to the selected provider. PuffinParse has no
   telemetry and makes no network calls other than to the provider you choose.
-- Recorded test fixtures under `crates/puffinparse-core/tests/fixtures/` must be
-  redacted; never commit a fixture containing a real key, token or job id tied
-  to a live account.
+- Recorded test fixtures under `crates/puffinparse-core/tests/fixtures/` (and the
+  sample responses in `docs/providers/`) must be redacted; never commit a fixture
+  containing a real key, token, signed URL, dashboard link, or run, job, file or
+  project id tied to a live account. Replace ids with obviously fake ones of the
+  same format (see the fixtures README).
+- Committed benchmark results are the one deliberate exception: each document
+  keeps its `provider_job_id` so a run can be audited against the provider's
+  dashboard (an id grants no access without the account's key). Dashboard and
+  studio links in the saved raw responses (`benchmark/results/outputs/*/*.json`)
+  are replaced; the scored `.md` outputs are never edited.
 - Releases are published to PyPI with trusted publishing (OIDC), so no
   long-lived PyPI token exists in this repository's secrets.

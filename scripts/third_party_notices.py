@@ -10,8 +10,12 @@ on every target platform, so the list is a superset of what any one build links.
 
 The summary is what the repository commits. `--full` collects each crate's own LICENSE / COPYING /
 NOTICE files from the local cargo registry, i.e. the copyright and permission notices that MIT,
-BSD, ISC, Apache-2.0 and similar licences ask binary redistributors to reproduce; attach it to
-release artifacts. Standard library only.
+BSD, ISC, Apache-2.0 and similar licences ask binary redistributors to reproduce; the release
+workflow ships it as THIRD_PARTY_LICENSES.txt in every artifact. A few crates publish no licence
+file; their texts are kept under licenses/extra/<name>-<version>/ (fetched from the crate's
+repository at the commit it was published from, see licenses/extra/README.md). `--check` and
+`--full` fail when a shipped crate has no licence text from either source, or when
+licenses/extra/ holds a directory no shipped crate uses. Standard library only.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "THIRD_PARTY_NOTICES.md"
+EXTRA = ROOT / "licenses" / "extra"
 LICENSE_FILE_PREFIXES = ("license", "licence", "copying", "notice", "unlicense", "copyright")
 
 # Licences that would conflict with distributing MIT binaries if one were the *only* option.
@@ -83,8 +88,11 @@ def render_summary(pkgs: list[dict[str, Any]]) -> str:
         "uses it under a permissive option (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, ...). No",
         "dependency is available only under a copyleft licence.",
         "",
-        "The full copyright and licence texts of every crate are produced with",
-        "`python scripts/third_party_notices.py --full THIRD_PARTY_LICENSES.txt`.",
+        "The full copyright and licence texts of every crate are in `THIRD_PARTY_LICENSES.txt`, which",
+        "ships next to this file and `LICENSE` in every release artifact (CLI archives, wheels and",
+        "sdist, npm packages, and `/usr/share/doc/puffinparse/` in the Docker image). Generate it with",
+        "`python scripts/third_party_notices.py --full THIRD_PARTY_LICENSES.txt`; texts for crates",
+        "that publish no licence file are kept under [licenses/extra/](licenses/extra/README.md).",
         "",
         "Not linked, so not listed: the Python and Node packages have no runtime dependencies;",
         "`tesseract` (Apache-2.0) and `pdftoppm` (Poppler, GPL-2.0-or-later) are optional external",
@@ -109,7 +117,7 @@ def render_summary(pkgs: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def license_files(pkg: dict[str, Any]) -> list[Path]:
+def crate_license_files(pkg: dict[str, Any]) -> list[Path]:
     crate_dir = Path(pkg["manifest_path"]).parent
     files = [
         f
@@ -123,14 +131,51 @@ def license_files(pkg: dict[str, Any]) -> list[Path]:
     return files
 
 
+def license_files(pkg: dict[str, Any]) -> tuple[list[Path], str]:
+    """The licence texts for a crate and where they came from."""
+    files = crate_license_files(pkg)
+    if files:
+        return files, ""
+    extra_dir = EXTRA / f"{pkg['name']}-{pkg['version']}"
+    if extra_dir.is_dir():
+        files = sorted(f for f in extra_dir.iterdir() if f.is_file())
+        if files:
+            note = (
+                f"(not in the crate; from licenses/extra/{extra_dir.name}/,"
+                " sources listed in licenses/extra/README.md)"
+            )
+            return files, note
+    # r-efi keeps its licence statement, permission notices and copyright lines in AUTHORS.
+    authors = Path(pkg["manifest_path"]).parent / "AUTHORS"
+    if authors.is_file():
+        return [authors], "(the crate's AUTHORS file carries its licence and copyright notices)"
+    return [], ""
+
+
+def coverage_problems(pkgs: list[dict[str, Any]]) -> list[str]:
+    """Shipped crates without any licence text, and licenses/extra/ entries nothing uses."""
+    problems = [
+        f"no licence text for {p['name']} {p['version']} ({p.get('license')}): "
+        f"add it under licenses/extra/{p['name']}-{p['version']}/"
+        for p in pkgs
+        if not license_files(p)[0]
+    ]
+    wanted = {f"{p['name']}-{p['version']}" for p in pkgs if not crate_license_files(p)}
+    if EXTRA.is_dir():
+        for d in sorted(EXTRA.iterdir()):
+            if d.is_dir() and d.name not in wanted:
+                problems.append(f"licenses/extra/{d.name}/ is unused (crate updated or removed?)")
+    return problems
+
+
 def render_full(pkgs: list[dict[str, Any]]) -> str:
     parts = [render_summary(pkgs), "", "=" * 100, "Licence texts", "=" * 100]
     for p in pkgs:
         title = f"{p['name']} {p['version']}  ({p.get('license') or 'see files'})"
         parts += ["", "-" * 100, title, "-" * 100]
-        files = license_files(p)
-        if not files:
-            parts.append(f"(no licence file shipped in the crate; licence: {p.get('license')})")
+        files, note = license_files(p)
+        if note:
+            parts.append(note)
         for f in files:
             parts += [f"--- {f.name}", f.read_text(encoding="utf-8", errors="replace").rstrip()]
     return "\n".join(parts) + "\n"
@@ -148,6 +193,13 @@ def main() -> int:
         for p in bad:
             print(f"copyleft-only dependency: {p['name']} {p['version']} ({p['license']})", file=sys.stderr)
         return 1
+
+    if args.check or args.full:
+        problems = coverage_problems(pkgs)
+        for msg in problems:
+            print(msg, file=sys.stderr)
+        if problems:
+            return 1
 
     if args.full:
         Path(args.full).write_text(render_full(pkgs), encoding="utf-8")

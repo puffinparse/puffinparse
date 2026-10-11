@@ -1,9 +1,9 @@
 {
  "response_type": "parse",
- "job_id": "04fe7cf4-1f40-4a03-b1a0-460bd8d6a89a",
+ "job_id": "00000000-0000-4000-8000-0000000000a1",
  "duration": 0.7815132141113281,
  "pdf_url": "https://example-storage.invalid/converted.pdf?X-Amz-Signature=REDACTED",
- "studio_link": "https://studio.reducto.ai/job/04fe7cf4-1f40-4a03-b1a0-460bd8d6a89a",
+ "studio_link": "https://studio.reducto.ai/job/00000000-0000-4000-8000-0000000000a1",
  "usage": {
   "num_pages": 1,
   "credits": 1.0,

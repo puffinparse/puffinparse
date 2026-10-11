@@ -43,7 +43,7 @@ Two things make switching real rather than aspirational. **Modes**: every call n
 
 ```bash
 pip install puffinparse              # Python SDK (abi3 wheels: Linux glibc 2.28+, macOS, Windows)
-docker pull --platform linux/amd64 ghcr.io/ajinkyashejul/puffinparse   # gateway image (amd64 only for now)
+docker pull ghcr.io/ajinkyashejul/puffinparse   # gateway image (linux/amd64; linux/arm64 too from the next release)
 ```
 
 The CLI (which also runs the gateway) is a single binary: download the archive for your platform
@@ -643,5 +643,7 @@ PuffinParse stands on other people's work:
 
 MIT. See [LICENSE](https://github.com/ajinkyashejul/puffinparse/blob/main/LICENSE). The third-party
 crates compiled into the binaries are listed in
-[THIRD_PARTY_NOTICES.md](https://github.com/ajinkyashejul/puffinparse/blob/main/THIRD_PARTY_NOTICES.md),
-and the benchmark data keeps its own licence, stated per dataset.
+[THIRD_PARTY_NOTICES.md](https://github.com/ajinkyashejul/puffinparse/blob/main/THIRD_PARTY_NOTICES.md);
+every release artifact (CLI archives, wheels and sdist, npm packages, and the Docker image under
+`/usr/share/doc/puffinparse/`) ships `LICENSE`, that file and `THIRD_PARTY_LICENSES.txt` with each
+crate's full licence text. The benchmark data keeps its own licence, stated per dataset.

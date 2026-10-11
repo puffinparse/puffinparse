@@ -1,13 +1,13 @@
 {
   "response_type": "extract",
-  "job_id": "b0b32d1f-ba5a-4bf6-87c2-2bcb3345b1c4",
+  "job_id": "00000000-0000-4000-8000-0000000000a3",
   "usage": {
     "num_pages": 1,
     "num_fields": 2,
     "credits": 3.333333,
     "extract_mode": "extract"
   },
-  "studio_link": "https://studio.reducto.ai/job/b0b32d1f-ba5a-4bf6-87c2-2bcb3345b1c4",
+  "studio_link": "https://studio.reducto.ai/job/00000000-0000-4000-8000-0000000000a3",
   "result": [
     {
       "invoice_number": "INV-9865",

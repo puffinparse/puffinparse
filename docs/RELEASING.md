@@ -8,12 +8,18 @@ short-lived OIDC credentials (trusted publishing). No registry token is stored i
 | PyPI | `puffinparse` (abi3 wheels: manylinux_2_28 x86_64/aarch64, macOS x86_64/arm64, Windows x64; sdist) | trusted publishing | `pypi` |
 | npm | `puffinparse` plus `puffinparse-linux-x64-gnu`, `puffinparse-linux-arm64-gnu`, `puffinparse-darwin-x64`, `puffinparse-darwin-arm64`, `puffinparse-win32-x64-msvc` | trusted publishing, with provenance | `npm` |
 | crates.io | `puffinparse-core`, then `puffinparse-server`, then `puffinparse-cli` | trusted publishing (`rust-lang/crates-io-auth-action`) | `crates-io` |
-| GHCR | `ghcr.io/ajinkyashejul/puffinparse` (linux/amd64; tags `X.Y.Z`, `X.Y`, `latest`) | `GITHUB_TOKEN` | none |
+| GHCR | `ghcr.io/ajinkyashejul/puffinparse` (linux/amd64 + linux/arm64, built natively on `ubuntu-24.04` / `ubuntu-24.04-arm` and merged into one manifest list; tags `X.Y.Z`, `X.Y`, `latest`) | `GITHUB_TOKEN` | none |
 | GitHub Releases | CLI archives (Linux x64/arm64, macOS x64/arm64, Windows x64), wheels, sdist, `SHA256SUMS` | `GITHUB_TOKEN` | none |
 
 npm and crates.io are opt-in: their jobs are skipped (not failed) until the repository variables
 `PUBLISH_NPM` and `PUBLISH_CRATES` are set to `true` (Settings → Secrets and variables → Actions →
 Variables), so a release can ship to PyPI, GHCR and GitHub before those registries are set up.
+
+Every artifact carries `LICENSE`, `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LICENSES.txt` (the full
+licence text of every bundled crate, generated once per release by the `notices` job with
+`scripts/third_party_notices.py --full`); `scripts/check_release_licenses.py` fails the build if
+any wheel, sdist, CLI archive or npm tarball lacks them, and the image jobs check
+`/usr/share/doc/puffinparse/`.
 
 `puffinparse-python` and `puffinparse-node` are `publish = false`: they ship as the PyPI and npm
 packages. Every registry job waits for every build, so a broken target publishes nothing. Each

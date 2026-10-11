@@ -131,10 +131,10 @@ Trimmed real response (`crates/puffinparse-core/tests/fixtures/reducto_parse.jso
 ```json
 {
   "response_type": "parse",
-  "job_id": "04fe7cf4-1f40-4a03-b1a0-460bd8d6a89a",
+  "job_id": "00000000-0000-4000-8000-0000000000a1",
   "duration": 0.7815132141113281,
   "pdf_url": "https://example-storage.invalid/converted.pdf?X-Amz-Signature=REDACTED",
-  "studio_link": "https://studio.reducto.ai/job/04fe7cf4-1f40-4a03-b1a0-460bd8d6a89a",
+  "studio_link": "https://studio.reducto.ai/job/00000000-0000-4000-8000-0000000000a1",
   "usage": {
     "num_pages": 1,
     "credits": 1.0,
@@ -237,9 +237,9 @@ Trimmed real response (`crates/puffinparse-core/tests/fixtures/reducto_extract.j
 ```json
 {
   "response_type": "v3_extract",
-  "job_id": "33e0fac4-a1bc-42ed-9aab-9c9faab42e31",
+  "job_id": "00000000-0000-4000-8000-0000000000a2",
   "usage": { "num_pages": 1, "num_fields": 15, "credits": 3.333333, "extract_mode": "extract" },
-  "studio_link": "https://studio.reducto.ai/job/33e0fac4-a1bc-42ed-9aab-9c9faab42e31",
+  "studio_link": "https://studio.reducto.ai/job/00000000-0000-4000-8000-0000000000a2",
   "result": {
     "invoice_number": {
       "value": "INV-9865",

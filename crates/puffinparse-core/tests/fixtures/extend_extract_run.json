@@ -1,6 +1,6 @@
 {
   "object": "extract_run",
-  "id": "exr_TR4bUO18s2EjPzeLNB5vy",
+  "id": "exr_FAKEextractRun0000001",
   "status": "PROCESSED",
   "output": {
     "value": {
@@ -25,7 +25,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -59,7 +59,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -99,7 +99,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -126,7 +126,7 @@
             ]
           },
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -160,7 +160,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -187,7 +187,7 @@
             ]
           },
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -221,7 +221,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -255,7 +255,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -289,7 +289,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -323,7 +323,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -357,7 +357,7 @@
         "reviewAgentScore": null,
         "citations": [
           {
-            "fileId": "file_ffUqII9mSKKJsgQN1j1qz",
+            "fileId": "file_FAKEextractFile000001",
             "page": {
               "number": 1,
               "width": 1240,
@@ -460,7 +460,7 @@
   },
   "file": {
     "object": "file",
-    "id": "file_ffUqII9mSKKJsgQN1j1qz",
+    "id": "file_FAKEextractFile000001",
     "name": "invoice_001.png",
     "type": "IMG",
     "parentFileId": null,
@@ -472,15 +472,15 @@
     "createdAt": "2026-09-11T08:56:09.595Z",
     "updatedAt": "2026-09-11T08:56:44.882Z"
   },
-  "parseRunId": "pr_q0b8az3CAWPoSbWGUk7RO",
-  "dashboardUrl": "https://dashboard.extend.ai/runs/exr_TR4bUO18s2EjPzeLNB5vy",
+  "parseRunId": "pr_FAKEextractParse00001",
+  "dashboardUrl": "https://dashboard.extend.ai/runs/exr_FAKEextractRun0000001",
   "usage": {
     "credits": 3,
     "totalCredits": 3,
     "breakdown": [
       {
         "object": "extract_run",
-        "id": "exr_TR4bUO18s2EjPzeLNB5vy",
+        "id": "exr_FAKEextractRun0000001",
         "credits": 3,
         "charges": [
           {

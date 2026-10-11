@@ -9,18 +9,28 @@
 #     puffinparse
 #
 # See docs/SERVER.md. The image also carries the full CLI (`docker run puffinparse parse ...`).
+# Licences: /usr/share/doc/puffinparse/ (LICENSE, THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt).
 
 FROM rust:1-slim-bookworm AS build
+# python3 runs scripts/third_party_notices.py, which collects the licence texts the image ships.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked -p puffinparse-cli \
-    && cp target/release/puffinparse /puffinparse
+    && cp target/release/puffinparse /puffinparse \
+    && mkdir -p /licenses \
+    && python3 scripts/third_party_notices.py --full /licenses/THIRD_PARTY_LICENSES.txt \
+    && cp LICENSE THIRD_PARTY_NOTICES.md /licenses/
 
 # distroless/cc: glibc + libgcc + CA certificates, no shell, runs as uid 65532.
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /puffinparse /usr/local/bin/puffinparse
+# PuffinParse's licence and the notices and licence texts of every crate compiled into the binary.
+COPY --from=build /licenses/ /usr/share/doc/puffinparse/
 EXPOSE 4000
 ENTRYPOINT ["/usr/local/bin/puffinparse"]
 # Fails closed: without a mounted config the container exits instead of serving an open gateway.

@@ -9,8 +9,11 @@ Each is used under the licence its authors chose; where a crate offers a choice,
 uses it under a permissive option (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, ...). No
 dependency is available only under a copyleft licence.
 
-The full copyright and licence texts of every crate are produced with
-`python scripts/third_party_notices.py --full THIRD_PARTY_LICENSES.txt`.
+The full copyright and licence texts of every crate are in `THIRD_PARTY_LICENSES.txt`, which
+ships next to this file and `LICENSE` in every release artifact (CLI archives, wheels and
+sdist, npm packages, and `/usr/share/doc/puffinparse/` in the Docker image). Generate it with
+`python scripts/third_party_notices.py --full THIRD_PARTY_LICENSES.txt`; texts for crates
+that publish no licence file are kept under [licenses/extra/](licenses/extra/README.md).
 
 Not linked, so not listed: the Python and Node packages have no runtime dependencies;
 `tesseract` (Apache-2.0) and `pdftoppm` (Poppler, GPL-2.0-or-later) are optional external
