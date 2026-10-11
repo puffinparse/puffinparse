@@ -62,6 +62,11 @@ for any other front-end without changing the build:
 | `data/datasets/<name>/docs/<doc_id>.<ext>` | the input documents (PNG/PDF copied as-is) |
 | `data/datasets/<name>/docs/<doc_id>.p<n>.webp` | rendered pages of a PDF input (pypdfium2); `.p1.png` when only Pillow is available |
 
+**This layout is a public, read-only API.** On puffinparse.com these files are documented at
+`/docs/benchmark/data-api/` and described by the OpenAPI 3.1 document `/openapi.json`, whose
+schemas are in `website/data_api.py`. Changing a path or a field here means updating those schemas
+too: `website/qa.py` (CI) validates every published index, run and manifest against them.
+
 **Manifests that point outside themselves.** `combined-v1` copies no bytes: every document is a
 `../synthetic-v1/…` or `../parsebench/…` path relative to its manifest. The build resolves those
 against the manifest and writes each file to the matching place under `data/datasets/`, so the same

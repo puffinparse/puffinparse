@@ -7,6 +7,8 @@ web fonts.
 ```
 website/
   build.py            the entire build (landing section + docs section + link check + redirects)
+  data_api.py         OpenAPI 3.1 + RFC 9727 API catalog for the benchmark data (used by build + qa)
+  qa.py               offline QA of a finished build (agent-facing contract), run in CI
   nav.json            the docs site map: sections, pages, sources, descriptions
   landing/index.html  the landing page template; {{PLACEHOLDER}}s filled from repo data
   pages/*.md          the pages written for the site (everything else is repo markdown)
@@ -113,11 +115,15 @@ follow the docs prefix and need no editing if it ever changes.
 | `search.json` | Page titles + headings, fetched lazily by the search box. |
 | `agents.md` | The `/docs/agents/` page as Markdown at the site root, for a short URL to hand an agent. |
 | `sitemap.xml`, `robots.txt` | Standard crawler files, built from `--site-url`. The sitemap lists the landing page and every docs page; `robots.txt` allows everyone and names the major AI crawlers and agents explicitly. |
+| `openapi.json` | OpenAPI 3.1 description of the benchmark data under `/benchmark-results/data/` (see *Benchmark data API* below). |
+| `.well-known/api-catalog` | RFC 9727 API catalog: a Linkset pointing at the data API, its OpenAPI description and its docs page. |
 | `404.html`, `404.md` | Not-found page, styled like the rest, pointing at both halves; `404.md` is what Markdown clients get. |
 | `style.css`, `landing.css`, `app.js` | Copied verbatim from `website/assets/`. |
 
 Every HTML page carries `<meta name="description">`, `<link rel="canonical">` and
-`<link rel="alternate" type="text/markdown">` pointing at its `index.md`, plus a "View as Markdown"
+`<link rel="alternate" type="text/markdown">` pointing at its `index.md`, the API discovery links
+`<link rel="api-catalog">`, `rel="service-desc"` (`/openapi.json`) and `rel="service-doc"` (RFC
+8631; also on the landing page, the 404 page and the results viewer), plus a "View as Markdown"
 link in the footer, and one schema.org JSON-LD block: `SoftwareApplication` + `WebSite` (with a
 `SearchAction` on `/docs/?q=`, which opens the docs search) on the landing page, `TechArticle` on
 docs pages, and `Dataset` entries (one per redistributed benchmark dataset, with its licence) on the
@@ -172,6 +178,10 @@ home's Markdown. This is a generated `routes` array, one route per page with a `
 the `accept` header: `rewrites` cannot do it, because Vercel applies them only after the filesystem
 and every docs URL is a real `index.html`. The `Vary` header for HTML responses is a static
 `headers` rule.
+The first generated route pins `/.well-known/api-catalog` (with or without a trailing slash, so
+`trailingSlash` cannot redirect the extension-less file to a 404) and sets its RFC 9727 media type
+and `Link` header; the hand-maintained `headers` block says the same for static hosts that honour
+it.
 
 Both arrays are generated, not hand-written:
 
@@ -193,6 +203,37 @@ curl -sI https://puffinparse.com/agents.md                                      
 ```
 
 `python -m http.server` does not negotiate; locally, fetch `<page>/index.md` directly.
+
+## Benchmark data API
+
+The results viewer's static JSON (`/benchmark-results/data/index.json`, `runs/<run_id>.json`,
+`outputs/<run_id>/<model_slug>/<doc>.{md,json}`, `datasets/<name>/manifest.json`) is documented as
+a read-only API: the docs page `website/pages/data-api.md` (`/docs/benchmark/data-api/`), the
+OpenAPI 3.1 description `/openapi.json` and the RFC 9727 catalog `/.well-known/api-catalog`
+(served as `application/linkset+json; profile="https://www.rfc-editor.org/info/rfc9727"` with a
+`Link: <...>; rel="api-catalog"` header, both from `vercel.json`).
+
+The schemas live in `website/data_api.py`, derived from the files the viewer build actually
+writes. `build.py` writes both documents after the viewer, so the OpenAPI path-parameter examples
+are real (the newest run, its top model, a document with both outputs). A change to the result or
+manifest format must update `data_api.py` too; `qa.py` fails otherwise.
+
+## Site QA
+
+```bash
+python website/build.py --out /tmp/site --site-url https://puffinparse.com --check
+python website/qa.py /tmp/site          # stdlib; uses openapi-spec-validator when installed
+```
+
+`qa.py` checks a finished build, offline, in about a second: a Markdown negotiation route in
+`vercel.json` for every page in `nav.json` (and the API-catalog route and headers); `llms.txt`
+structure (H1, summary blockquote, sections, every local link resolves, every page listed);
+JSON-LD parses on every HTML page and each carries the three API discovery links; `robots.txt`
+names the AI crawlers and its sitemap exists; `/openapi.json` is valid OpenAPI 3.1, every path
+with its example parameters is a file in the build, and the published index, runs, manifests and
+a sample of model outputs validate against its schemas; `/.well-known/api-catalog` is a valid
+Linkset whose links resolve. The `site` job in `.github/workflows/ci.yml` runs the build with
+`--check` and then `qa.py` on every push and pull request.
 
 ## Design notes
 

@@ -378,3 +378,22 @@ videos still show the text wordmark until they are re-rendered.
 *Amended 2026-09-25:* the mark is C2 of the explored set (kept after comparing six alternatives), and
 the mascot became the waving puffin with three pages in its beak (instead of three document fish),
 which says "documents" more directly. `docs/DESIGN.md` gained a Brand motion section.
+
+## ADR-25: The benchmark data is a documented, read-only API
+
+**Context.** Agents and scripts already read `/benchmark-results/data/` (llms.txt pointed at it),
+but its paths and shapes were only described in prose, so nothing told them what was stable, and a
+change to the viewer build could silently break them. Issue #20 asked for an OpenAPI description,
+RFC 9727 / RFC 8631 discovery and a site QA check.
+
+**Decision.** The files the viewer build already writes are the API; no endpoint is added and no
+server runs (a remote MCP endpoint stays out of scope). `website/data_api.py` holds the OpenAPI
+3.1 schemas, derived from the published files, and the RFC 9727 catalog; `website/build.py`
+publishes `/openapi.json` and `/.well-known/api-catalog` and links both, plus the docs page, from
+every page head. `website/qa.py` validates every published index, run and manifest against the
+schemas in CI.
+
+**Consequences.** The data layout under `/benchmark-results/data/` is now a public contract: a
+renamed path or field needs a schema update (CI enforces it) and should stay backward compatible
+or get a CHANGELOG entry. Schemas list the always-present keys as `required` and leave objects
+open, so new fields do not break clients or CI.

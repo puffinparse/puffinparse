@@ -633,6 +633,12 @@ calls made, resumed, failed, total cost, this invocation's cost and wall time.
 
 `LEADERBOARD.md` is regenerated from committed results and links to each run.
 
+The site publishes every committed result file, the run index and each model's saved outputs as a
+read-only JSON API under `/benchmark-results/data/` (`index.json`, `runs/<run_id>.json`,
+`outputs/<run_id>/<model_slug>/<doc>.{md,json}`, `datasets/<name>/manifest.json`), described by
+the OpenAPI 3.1 document `/openapi.json` (schemas in `website/data_api.py`) and listed in the RFC
+9727 catalog `/.well-known/api-catalog`. A change to the result JSON updates those schemas too.
+
 Document kinds: a manifest document is `kind: "transcript"` (default; `truth` markdown, scored by
 the text metrics) or `kind: "rules"` (a `rules` file of machine-checkable assertions — `present`,
 `absent`, `order`, `table_cell`, `bag_of_sentences` — scored by `puffinparse_core::bench::score_rules`,

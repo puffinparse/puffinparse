@@ -73,6 +73,32 @@
       ]
     },
     {
+      "source": "/.well-known/api-catalog",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/linkset+json; profile=\"https://www.rfc-editor.org/info/rfc9727\""
+        },
+        {
+          "key": "Link",
+          "value": "</.well-known/api-catalog>; rel=\"api-catalog\""
+        }
+      ]
+    },
+    {
+      "source": "/openapi.json",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/json; charset=utf-8"
+        },
+        {
+          "key": "Link",
+          "value": "</docs/benchmark/data-api/>; rel=\"service-doc\""
+        }
+      ]
+    },
+    {
       "source": "/(.*)/index.md",
       "headers": [
         {
@@ -252,6 +278,11 @@
       "permanent": true
     },
     {
+      "source": "/benchmark/data-api/",
+      "destination": "/docs/benchmark/data-api/",
+      "permanent": true
+    },
+    {
       "source": "/benchmark/vendor-benchmarks/",
       "destination": "/docs/benchmark/vendor-benchmarks/",
       "permanent": true
@@ -298,6 +329,14 @@
     }
   ],
   "routes": [
+    {
+      "src": "^/\\.well-known/api-catalog/?$",
+      "dest": "/.well-known/api-catalog",
+      "headers": {
+        "Content-Type": "application/linkset+json; profile=\"https://www.rfc-editor.org/info/rfc9727\"",
+        "Link": "</.well-known/api-catalog>; rel=\"api-catalog\""
+      }
+    },
     {
       "src": "^/$",
       "has": [
@@ -773,6 +812,21 @@
         }
       ],
       "dest": "/docs/benchmark/leaderboard/index.md",
+      "headers": {
+        "Content-Type": "text/markdown; charset=utf-8",
+        "Vary": "Accept"
+      }
+    },
+    {
+      "src": "^/docs/benchmark/data-api/?$",
+      "has": [
+        {
+          "type": "header",
+          "key": "accept",
+          "value": "(.*)text/markdown(.*)"
+        }
+      ],
+      "dest": "/docs/benchmark/data-api/index.md",
       "headers": {
         "Content-Type": "text/markdown; charset=utf-8",
         "Vary": "Accept"

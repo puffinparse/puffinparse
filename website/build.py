@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+import data_api
 import markdown
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -272,6 +273,19 @@ THEME_BUTTON = (
     '<circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.4"/>'
     '<path d="M8 1.6a6.4 6.4 0 0 0 0 12.8z" fill="currentColor"/></svg></button>'
 )
+
+
+def api_links(site: Site) -> str:
+    """RFC 9727 / RFC 8631 discovery links for every page head: the API catalog, the OpenAPI
+    description of the benchmark data (service-desc) and its docs page (service-doc)."""
+    return (
+        f'<link rel="api-catalog" href="{site.base}{data_api.API_CATALOG_PATH}" '
+        'type="application/linkset+json">\n'
+        f'<link rel="service-desc" href="{site.base}{data_api.OPENAPI_PATH}" '
+        f'type="{data_api.OPENAPI_TYPE}">\n'
+        f'<link rel="service-doc" href="{site.url(data_api.DOCS_SLUG)}" type="text/html">'
+    )
+
 
 FENCE_RE = re.compile(r"(^```.*?^```|^~~~.*?^~~~)", re.M | re.S)
 LINK_RE = re.compile(r"(\]\()(?!https?://|mailto:|#)([^)\s]+)((?:\s+\"[^\"]*\")?\))")
@@ -783,6 +797,7 @@ def landing_html(site: Site, providers: list[dict[str, Any]]) -> str:
         "GH_STAR": gh_star(site.repo),
         "CANONICAL": site.absolute(site.base),
         "JSONLD": landing_jsonld(site, description),
+        "API_LINKS": api_links(site),
         "DESCRIPTION": html.escape(description, quote=True),
         "THEME_BUTTON": THEME_BUTTON,
         "MODELS": html.escape(json.dumps(parse_models), quote=True),
@@ -872,6 +887,7 @@ def page_html(site: Site, page: Page, pages: list[Page]) -> str:
 <link rel="canonical" href="{canonical}">
 {alt}
 <link rel="icon" href="{FAVICON}">
+{api_links(site)}
 {social_meta(site, title, page.description, canonical)}
 {ANALYTICS}
 {page_jsonld(site, page) if page.has_md else ""}
@@ -1131,6 +1147,10 @@ def write_extras(site: Site, pages: list[Page], out: Path) -> None:
         "latency and cost for every model.",
         f"- `{site.viewer_url}data/outputs/<run_id>/<model with / replaced by _>/<doc>.md`: the markdown "
         "each model produced for each document.",
+        f"- [Benchmark data API]({site.url(data_api.DOCS_SLUG, md=True)}): the files above as a "
+        f"read-only JSON API, with curl examples. OpenAPI 3.1 description: "
+        f"[{site.base}{data_api.OPENAPI_PATH}]({site.base}{data_api.OPENAPI_PATH}); RFC 9727 API "
+        f"catalog: [{site.base}{data_api.API_CATALOG_PATH}]({site.base}{data_api.API_CATALOG_PATH}).",
         "",
         "## Docs",
         "",
@@ -1257,7 +1277,7 @@ def build_benchmark_viewer(site: Site, out: Path) -> bool:
         tags += "\n" + benchmark_jsonld(site)
         text = index.read_text(encoding="utf-8")
         stars = f'<script src="{site.base}stars.js" defer></script>'
-        head = "\n".join(part for part in (tags, ANALYTICS, stars) if part)
+        head = "\n".join(part for part in (tags, api_links(site), ANALYTICS, stars) if part)
         index.write_text(text.replace("</head>", head + "\n</head>", 1), encoding="utf-8")
         sitemap = out / "sitemap.xml"
         if sitemap.is_file():  # written by build() before the viewer exists
@@ -1265,6 +1285,33 @@ def build_benchmark_viewer(site: Site, out: Path) -> bool:
             text = sitemap.read_text(encoding="utf-8")
             sitemap.write_text(text.replace("</urlset>", entry, 1), encoding="utf-8")
     return True
+
+
+# ------------------------------------------------------------------------------- data API docs
+
+
+def write_data_api(site: Site, out: Path) -> None:
+    """``/openapi.json`` (OpenAPI 3.1 for the viewer's static JSON) and the RFC 9727
+    ``/.well-known/api-catalog``. Written after the viewer so the examples are real paths."""
+    data_url = f"{site.viewer_url}data"
+    server = site.absolute(site.base).rstrip("/")
+    docs_url = site.absolute(site.url(data_api.DOCS_SLUG))
+    spec = data_api.openapi_spec(
+        server,
+        data_url[len(site.base) - 1 :],  # site-root-relative: the server URL carries the base
+        docs_url,
+        data_api.pick_examples(out / BENCH_PREFIX / "data"),
+    )
+    (out / data_api.OPENAPI_PATH).write_text(json.dumps(spec, indent=1) + "\n", encoding="utf-8")
+    catalog = data_api.api_catalog(
+        site.absolute(site.base + data_api.API_CATALOG_PATH),
+        site.absolute(f"{data_url}/index.json"),
+        site.absolute(site.base + data_api.OPENAPI_PATH),
+        docs_url,
+    )
+    target = out / data_api.API_CATALOG_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(catalog, indent=1) + "\n", encoding="utf-8")
 
 
 # ------------------------------------------------------------------------------------ redirects
@@ -1328,12 +1375,33 @@ def negotiation_routes(site: Site, pages: list[Page]) -> list[dict[str, Any]]:
     return routes
 
 
+def well_known_routes(site: Site) -> list[dict[str, Any]]:
+    """The API catalog is an extension-less file: pin it (with or without a trailing slash, so
+    ``trailingSlash`` can never send it to a 404) and give it its RFC 9727 media type and the
+    ``Link`` header RFC 9727 asks HEAD responses to carry."""
+    path = site.base + data_api.API_CATALOG_PATH
+    return [
+        {
+            "src": "^" + path.replace(".", "\\.") + "/?$",
+            "dest": path,
+            "headers": {
+                "Content-Type": data_api.API_CATALOG_TYPE,
+                "Link": f'<{path}>; rel="api-catalog"',
+            },
+        }
+    ]
+
+
+def generated_routes(site: Site, pages: list[Page]) -> list[dict[str, Any]]:
+    return well_known_routes(site) + negotiation_routes(site, pages)
+
+
 def write_redirects(site: Site, pages: list[Page], path: Path = VERCEL_JSON) -> int:
     """Rewrite the generated ``redirects`` and ``routes`` arrays in vercel.json. Every other key is
     left untouched."""
     config = json.loads(path.read_text(encoding="utf-8"))
     config["redirects"] = redirect_map(site, pages)
-    config["routes"] = negotiation_routes(site, pages)
+    config["routes"] = generated_routes(site, pages)
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     return len(config["redirects"]) + len(config["routes"])
 
@@ -1347,7 +1415,7 @@ def check_redirects(site: Site, pages: list[Page], out: Path, path: Path = VERCE
     problems = []
     for key, expected in (
         ("redirects", redirect_map(site, pages)),
-        ("routes", negotiation_routes(site, pages)),
+        ("routes", generated_routes(site, pages)),
     ):
         current = config.get(key, [])
         if current != expected:
@@ -1359,7 +1427,7 @@ def check_redirects(site: Site, pages: list[Page], out: Path, path: Path = VERCE
         target = out / r["destination"].strip("/") / "index.html"
         if not target.exists():
             problems.append(f"{path.name}: redirect {r['source']} -> missing {r['destination']}")
-    for r in negotiation_routes(site, pages):
+    for r in generated_routes(site, pages):
         if not (out / r["dest"].lstrip("/")).is_file():
             problems.append(f"{path.name}: route {r['src']} -> missing {r['dest']}")
     return problems
@@ -1521,6 +1589,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     out = Path(args.out).resolve()
     site, pages = build(base, out, args.site_url.rstrip("/"), args.docs_prefix)
     viewer = build_benchmark_viewer(site, out) if args.with_benchmark else False
+    write_data_api(site, out)
 
     files = sum(1 for f in out.rglob("*") if f.is_file())
     size = f"{dir_size(out) / 1024 / 1024:.1f} MB"

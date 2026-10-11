@@ -220,6 +220,13 @@
           "description": "Current results: accuracy, latency and cost per 1,000 pages for every model, plus a per-category breakdown."
         },
         {
+          "slug": "benchmark/data-api",
+          "title": "Benchmark data API",
+          "nav_title": "Data API",
+          "source": "website/pages/data-api.md",
+          "description": "The benchmark results as a read-only JSON API: leaderboard, runs, per-document scores, model outputs and datasets, with an OpenAPI 3.1 description and curl examples."
+        },
+        {
           "slug": "benchmark/vendor-benchmarks",
           "title": "Vendor benchmarks",
           "source": "docs/benchmarks/vendor-benchmarks.md",

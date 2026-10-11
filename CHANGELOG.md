@@ -16,6 +16,20 @@ Python package `puffinparse` share a single version. Entries before the rename s
   (the hand-written introduction lives in `benchmark/LEADERBOARD.intro.md`), and a test fails when
   `benchmark/LEADERBOARD.md` is out of date with the committed results. `make leaderboard` used to
   overwrite the page with one merged table.
+- Benchmark data API: the results viewer's static JSON (leaderboard index, full runs with
+  per-document scores, per-document model outputs, dataset manifests) is documented as a read-only
+  API at `/docs/benchmark/data-api/` with curl examples, described by an OpenAPI 3.1 document at
+  `/openapi.json` (schemas derived from the published files, examples taken from the newest run)
+  and listed in `llms.txt`.
+- `/.well-known/api-catalog` (RFC 9727 Linkset, served as `application/linkset+json` with the
+  RFC 9727 profile and a `Link: rel="api-catalog"` header) and RFC 8631 `service-desc` /
+  `service-doc` links plus `rel="api-catalog"` in the head of every page, including the landing
+  page and the results viewer.
+- Site QA in CI: a `site` job builds the site with `--check` and runs `website/qa.py`, which checks
+  offline that every docs page has a Markdown negotiation route, `llms.txt` is well formed and its
+  links resolve, JSON-LD parses on every page, `robots.txt` names the AI crawlers and a sitemap,
+  `/openapi.json` is valid, its example paths exist and the published JSON matches its schemas,
+  and the API catalog is a valid Linkset.
 
 ## [0.1.6] - 2026-10-08
 
