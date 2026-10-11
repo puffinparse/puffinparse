@@ -426,3 +426,21 @@ price ceiling (`FREE_TIER_MAX_PRICE_PER_PAGE`, mirrored by the gateway's
 `free_tier_max_price_per_page`) and the sample set (`PLAYGROUND_SAMPLES`).
 Playground jobs live in the gateway's memory like other jobs, so the hosted service runs a single
 instance (`deploy/cloudrun/`); the free-tier counters are shared state in Supabase.
+
+**Launch setup (October 2026), chosen while neither product has users.**
+- **Scale to zero, jobs in memory.** The page polls a run every few seconds until it finishes and
+  never returns to a job afterwards, so scaling to zero cannot touch a run in progress. A restart
+  (deploy, instance move, crash) fails the runs in progress; a free-tier run's reserved pages and
+  spend stay counted for that day. Keeping a warm instance (about $10/month) would not prevent
+  that, so it is not used.
+- **Supabase project shared with the chess app.** The free plan allows two projects. The
+  playground's tables and functions are confined to the `playground` schema and `playground_*`
+  functions, but sign-in (users, GitHub provider, email templates, redirect URLs) is shared, and
+  the gateway holds the project's secret key, which can read every table in the project.
+
+**Revisit when:**
+- **The chess app has users:** move the playground to its own Supabase project, so a compromised
+  public gateway cannot reach chess data. Only today's counters live there, so nothing needs
+  copying; playground users sign up again.
+- **The playground has regular traffic:** keep free-tier jobs in Supabase, so a restart does not
+  fail runs in progress.

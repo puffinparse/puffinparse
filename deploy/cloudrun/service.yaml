@@ -23,6 +23,8 @@ spec:
     metadata:
       annotations:
         # Jobs are held in this process's memory: one instance, so every poll finds its job.
+        # Scale to zero is safe (a run being polled keeps the instance up); a restart fails the
+        # runs in progress. See ADR-26 for when to move jobs to durable storage.
         autoscaling.knative.dev/maxScale: "1"
         autoscaling.knative.dev/minScale: "0"
         run.googleapis.com/execution-environment: gen2

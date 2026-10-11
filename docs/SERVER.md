@@ -334,6 +334,11 @@ unknown `kid`), with `exp`, `aud` and `iss` checked and anonymous sessions refus
 for `ip_rpm` is the connection's address, or with `trust_forwarded_for = N` the N-th
 `X-Forwarded-For` entry from the right (IPv6 is limited per /64).
 
+Playground jobs, like all gateway jobs, live in the process's memory. The page polls each job until
+it finishes and never comes back to it, so scaling to zero is safe while a run is being polled; a
+restart fails the runs in progress (their free-tier pages and spend stay counted for the day).
+The hosted setup and when to revisit it are in [ADR-26](DECISIONS.md).
+
 **`GET /v1/playground/config`** (optional bearer) answers what the page may offer right now:
 
 ```json
