@@ -146,7 +146,23 @@ pub fn results_path(run_dir: &Path) -> PathBuf {
 pub fn load_manifest(run_dir: &Path) -> Result<RunManifest, String> {
     let p = manifest_path(run_dir);
     let raw = std::fs::read_to_string(&p).map_err(|e| format!("cannot read {}: {e}", p.display()))?;
-    serde_json::from_str(&raw).map_err(|e| format!("cannot parse {}: {e}", p.display()))
+    let mut m: RunManifest = serde_json::from_str(&raw).map_err(|e| format!("cannot parse {}: {e}", p.display()))?;
+    // A dataset folder that was moved or copied (with its runs) to another place or machine: the
+    // recorded root is gone, but the run still sits at `<dataset>/.puffinparse/runs/<id>`.
+    if !Path::new(&m.dataset_root).is_dir() {
+        if let Some(root) = moved_dataset_root(run_dir) {
+            m.dataset_root = root.to_string_lossy().into_owned();
+        }
+    }
+    Ok(m)
+}
+
+fn moved_dataset_root(run_dir: &Path) -> Option<PathBuf> {
+    let dir = std::fs::canonicalize(run_dir).ok()?;
+    let runs = dir.parent()?;
+    let hidden = runs.parent()?;
+    (runs.file_name()? == "runs" && hidden.file_name()? == ".puffinparse")
+        .then(|| hidden.parent().map(Path::to_path_buf))?
 }
 
 pub fn write_manifest(run_dir: &Path, m: &RunManifest) -> Result<(), String> {
@@ -864,6 +880,20 @@ mod tests {
         let (_, m) = plan(&spec(&dir, &["tesseract"]), &Via::Keys).unwrap();
         assert!(check_budget(&m.estimate, None).is_ok());
         assert!(plan(&spec(&dir, &["reducto/extract"]), &Via::Keys).is_err());
+    }
+
+    #[test]
+    fn a_moved_dataset_still_finds_its_documents() {
+        let dir = dataset(1);
+        let (_, m) = plan(&spec(&dir, &["tesseract"]), &Via::Keys).unwrap();
+        let prep = prepare_new(&spec(&dir, &["tesseract"]), &Via::Keys, m).unwrap();
+        let moved = tempdir("run-moved");
+        let target = moved.join("copy");
+        std::fs::rename(&dir, &target).unwrap();
+        let run = target.join(prep.dir.strip_prefix(&dir).unwrap());
+        let m = load_manifest(&run).unwrap();
+        assert_eq!(Path::new(&m.dataset_root), std::fs::canonicalize(&target).unwrap());
+        assert!(Path::new(&m.dataset_root).join("doc0.pdf").is_file());
     }
 
     #[tokio::test]
