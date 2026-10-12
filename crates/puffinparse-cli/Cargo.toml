@@ -21,7 +21,7 @@ path = "src/main.rs"
 puffinparse-core = { workspace = true }
 puffinparse-server = { path = "../puffinparse-server", version = "0.1.6" }
 # `io-std` + `io-util`: `puffinparse mcp` speaks JSON-RPC over stdin / stdout.
-tokio = { workspace = true, features = ["io-std", "io-util"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "net", "process", "signal"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
@@ -33,8 +33,13 @@ indicatif = { workspace = true }
 futures = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2 = "0.11"
+# `eval run --gateway` posts documents to a PuffinParse gateway; `eval view` serves a local viewer.
+# Both are already in the tree through the core and the gateway crate.
+reqwest = { workspace = true }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-# Loopback mock of a provider API for the MCP tests (already built for puffinparse-server).
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# Loopback mocks of a provider API and a gateway for the MCP and eval tests.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "multipart", "query", "tokio"] }

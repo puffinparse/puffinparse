@@ -19,6 +19,7 @@
 //! it. Every outgoing line is scrubbed of the provider keys found in the environment before it is
 //! written, as a last line of defence: keys are never part of a tool result to begin with.
 
+mod eval_tools;
 mod tools;
 
 #[cfg(test)]
@@ -30,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
-pub use tools::{AllowList, Config};
+pub use tools::{error_text, AllowList, Config};
 
 /// Modern (stateless, per-request `_meta`) revisions this server implements.
 pub const MODERN_VERSIONS: &[&str] = &["2026-07-28"];
@@ -56,7 +57,10 @@ its provider is ready (API key set in this server's environment, or a local engi
 extract or compare call uploads the document to the provider of the chosen model, which bills the user at \
 its per-page price; local engines (tesseract, docling, paddleocr, vllm) keep the document on the user's \
 machine or server. Use `pages` to limit cost on long documents, and prefer one model over compare unless \
-the user wants a comparison. Files are local paths (absolute paths are safest) or public http(s) URLs.";
+the user wants a comparison. Files are local paths (absolute paths are safest) or public http(s) URLs. \
+To find the best model for the user's own documents, follow the find_best_model prompt: scan_dataset, a few \
+questions, recommend_models, run_dataset (dry_run first, then max_cost_usd after the user agrees), run_status, \
+analyze_run, get_output and record_review on the documents it queues, then open_viewer.";
 
 /// Run the server on this process's stdin / stdout until stdin closes.
 pub async fn run_stdio(cfg: Config) -> anyhow::Result<()> {
@@ -336,7 +340,7 @@ impl Server {
                 tracing::info!(requested, version, "puffinparse mcp: initialize");
                 Ok(json!({
                     "protocolVersion": version,
-                    "capabilities": { "tools": { "listChanged": false } },
+                    "capabilities": { "tools": { "listChanged": false }, "prompts": { "listChanged": false } },
                     "serverInfo": server_info(),
                     "instructions": INSTRUCTIONS,
                 }))
@@ -344,13 +348,15 @@ impl Server {
             "server/discover" => Ok(json!({
                 "resultType": "complete",
                 "supportedVersions": supported_versions(),
-                "capabilities": { "tools": {} },
+                "capabilities": { "tools": {}, "prompts": {} },
                 "_meta": { META_SERVER_INFO: server_info() },
                 "instructions": INSTRUCTIONS,
             })),
             "ping" => Ok(json!({})),
             "tools/list" => {
-                let mut result = json!({ "tools": tools::definitions(era.features()) });
+                let mut defs = tools::definitions(era.features());
+                defs.extend(eval_tools::definitions(era.features()));
+                let mut result = json!({ "tools": defs });
                 if era == Era::Modern {
                     // CacheableResult (2026-07-28): the list is fixed for the life of the process.
                     result["ttlMs"] = json!(3_600_000);
@@ -358,6 +364,8 @@ impl Server {
                 }
                 Ok(result)
             }
+            "prompts/list" => Ok(json!({ "prompts": eval_tools::prompt_definitions() })),
+            "prompts/get" => eval_tools::get_prompt(params).map_err(|e| RpcError::new(INVALID_PARAMS, e)),
             other => Err(RpcError::new(METHOD_NOT_FOUND, format!("Method not found: {other}"))),
         }
     }
@@ -369,7 +377,7 @@ fn tool_call_params(params: &Map<String, Value>) -> Result<(String, Map<String, 
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| RpcError::new(INVALID_PARAMS, "tools/call: \"name\" (string) is required"))?;
-    if !tools::NAMES.contains(&name) {
+    if !tools::NAMES.contains(&name) && !eval_tools::NAMES.contains(&name) {
         return Err(RpcError::new(INVALID_PARAMS, format!("Unknown tool: {name}")));
     }
     let args = match params.get("arguments") {

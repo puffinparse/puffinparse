@@ -181,7 +181,10 @@ puffinparse mcp [OPTIONS]
 | `--max-retries <N>` | `2` | Retries on transient errors. |
 
 Tools: `parse`, `ocr`, `extract`, `list_models` and `compare`, which runs one document through up to
-eight models concurrently and reports each one's latency, cost, output length and an excerpt.
+eight models concurrently and reports each one's latency, cost, output length and an excerpt, plus
+the dataset tools behind [`puffinparse eval`](#puffinparse-eval) and the `find_best_model` prompt
+(see [Find the best model for your documents](/agents/#find-the-best-model-for-your-documents)).
+`--root` also limits where the dataset tools write.
 Provider keys come from the environment, exactly as for the other subcommands. No tool accepts a key
 and no result contains one. Documents go only to the provider of the model being called.
 
@@ -193,6 +196,46 @@ stderr. The server exits when stdin closes.
 ```bash
 puffinparse mcp --models reducto,llamaparse,tesseract --root ~/Documents/invoices
 ```
+
+## `puffinparse eval`
+
+Find the best model for your own documents: run several models over a folder, compare them, check
+the results by eye and pick one. This is the workflow the MCP server's `find_best_model` prompt
+drives; every step also works by hand.
+
+```bash
+puffinparse eval scan ~/docs                     # documents, pages and types (no network)
+puffinparse eval recommend --monthly-pages 20000 --max-usd-per-1k 10 --needs tables,scans --zdr
+puffinparse eval run ~/docs -m reducto,llamaparse/cost_effective,tesseract --dry-run
+puffinparse eval run ~/docs -m reducto,llamaparse/cost_effective,tesseract --max-cost 5
+puffinparse eval analyze ~/docs/.puffinparse/runs/<run> --write-report
+puffinparse eval review ~/docs/.puffinparse/runs/<run> --doc a.pdf --model reducto/r-1 --verdict correct
+puffinparse eval view ~/docs/.puffinparse/runs/<run>
+puffinparse eval anonymize ~/docs --out ~/docs-redacted --term "Jane Doe"
+```
+
+| Subcommand | What it does |
+|---|---|
+| `scan <DATASET>` | Counts documents (PDF, images, office files, HTML), pages and types; lists reference transcripts (`<file>.truth.md` or `<stem>.truth.md`) and earlier runs. Hidden files and folders are skipped. |
+| `recommend` | Shortlists models from the published benchmark, list prices and each provider's data handling. `--monthly-pages`, `--max-usd-per-1k`, `--tolerance low\|medium\|high` (2, 5 or 10 benchmark points below the best still count as good enough), `--priority accuracy\|balanced\|cost\|speed`, `--zdr`, `--local-only`, `--needs`, `--top`. |
+| `run [DATASET]` | Runs each model (`-m`) over each document and saves every output. `--pages`, `--limit` and `--filter` narrow the run; `--dry-run` prints the plan and estimate. A run with priced models needs `--max-cost`: it refuses to start above the estimate and stops when the spend reaches it. `--resume <RUN_DIR>` finishes an earlier run, making only the missing or failed calls. `--gateway` pays through a gateway key instead of your own provider keys. |
+| `analyze <RUN>` | Per model: failures, agreement with the other models, latency, cost, monthly cost at `--monthly-pages`, reviews, scores against reference transcripts, and the documents most worth checking. `--write-report` writes `report.md`. |
+| `review <RUN>` | Records a verdict (`correct`, `minor_errors`, `major_errors`, `unusable`) for one document and model. |
+| `view <RUN>` | A local viewer on `127.0.0.1`: each document next to every model's output (rendered, Markdown, or a diff against another model), with the same review form. `--port`, `--no-open`. |
+| `anonymize <DATASET> --out <DIR>` | Redacted copies made locally with Tesseract: email addresses, phone numbers, card numbers, IBANs and US social security numbers by default (`--kinds` adds `date` and `id`), plus every `--term`. Output is image-only PDFs. Needs Tesseract, and `pdftoppm` for PDFs. |
+
+A run lives in `<dataset>/.puffinparse/runs/<run_id>/` (or under `--out-dir`): `run.json` (models,
+documents, estimate, status), `results.jsonl` (one line per call: ok or the typed error, pages,
+latency, cost) and `outputs/<provider>_<model>/<document>.md`. Reviews go to `reviews.json`.
+
+Agreement compares each model's words and numbers with every other model's on the same document.
+It finds outliers and failures, but it is not accuracy: when most models make the same mistake, the
+one that got it right disagrees. Check the documents `analyze` puts in the review queue, or add
+reference transcripts.
+
+`--gateway` reads `PUFFINPARSE_GATEWAY_URL` (https, or a localhost address) and
+`PUFFINPARSE_GATEWAY_KEY`. The gateway's per-key budget caps the spend; when it runs out the run
+stops with status `budget_stopped` and `--resume` continues it.
 
 ## `puffinparse bench`
 
@@ -270,6 +313,15 @@ puffinparse bench score pred.md truth.md
 ```
 
 The same function is available from Python as `puffinparse.score(prediction, truth)`.
+
+### `puffinparse bench evidence`
+
+```bash
+puffinparse bench evidence <RESULT.json> [--out evidence.json]
+```
+
+Condenses a combined benchmark result into the per-model scores that `eval recommend` ships with
+(`make evidence` regenerates them from the newest combined run).
 
 ## See also
 

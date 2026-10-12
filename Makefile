@@ -10,7 +10,7 @@ PYTHON        ?= python
 CLI           := $(CARGO) run -p puffinparse-cli --release --
 
 .DEFAULT_GOAL := help
-.PHONY: help build test test-rust test-python test-node lint fmt develop bench dataset leaderboard clean
+.PHONY: help build test test-rust test-python test-node lint fmt develop bench dataset leaderboard evidence clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -54,6 +54,9 @@ dataset: ## Regenerate the synthetic-v1 benchmark dataset
 
 leaderboard: ## Regenerate benchmark/LEADERBOARD.md from committed results
 	$(CLI) bench report --by-dataset --intro benchmark/LEADERBOARD.intro.md benchmark/results/*.json > benchmark/LEADERBOARD.md
+
+evidence: ## Regenerate the benchmark evidence recommend_models ships with (newest combined run)
+	$(CLI) bench evidence $$(ls benchmark/results/*-combined-v*.json | sort | tail -1) --out crates/puffinparse-cli/src/eval/evidence.json
 
 clean: ## Remove Rust build artifacts
 	$(CARGO) clean

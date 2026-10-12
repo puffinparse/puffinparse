@@ -20,7 +20,7 @@ pub mod error;
 mod jobs;
 pub mod log;
 pub mod metrics;
-mod pages;
+pub mod pages;
 mod playground;
 pub mod usage;
 
