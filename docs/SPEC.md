@@ -699,6 +699,8 @@ puffinparse extract <file|url> --schema <file.json|inline JSON> [--instructions 
 puffinparse providers [--mode parse|ocr|extract] [--json]   # models, modes, per-mode pricing, key status
 puffinparse bench run|report|score|rescore                  # see §10 (parse mode; rescore is offline)
 puffinparse serve [--config puffinparse.toml] [--host H] [--port P]   # HTTP gateway, see §14
+puffinparse mcp [--models M] [--root DIR]                   # stdio MCP server for coding agents
+puffinparse eval scan|recommend|run|analyze|review|view|anonymize   # find the best model for a folder of documents
 ```
 
 One subcommand per mode; `--model` must name a model that serves that subcommand's mode, and a
@@ -713,6 +715,9 @@ options (`--pages`, `--language`, `--options`, `--timeout`, `--max-retries`, `--
   file or inline JSON starting with `{`.
 - `providers` lists every model with the modes it serves and its price in each mode; `--mode`
   filters the table to one mode and shows a single price column.
+
+`eval` and its run folder are documented in `website/pages/cli.md`; the decisions behind it are
+ADR-27 in `docs/DECISIONS.md`.
 
 Non-JSON output prints a one-line summary to stderr (`[model] N page(s) in T ms, est. $X`).
 Exit code 0 on success, 1 on provider error, 2 on usage/config error (including a model that

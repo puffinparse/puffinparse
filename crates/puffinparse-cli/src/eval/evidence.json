@@ -1,0 +1,1038 @@
+{
+  "source": "benchmark/results/2026-09-25-combined-v3.json",
+  "run_id": "run-20260925T090851Z",
+  "dataset": "combined-v3",
+  "documents": 199,
+  "scorer_version": 3,
+  "models": {
+    "extend/parse_light": {
+      "overall": 79.89,
+      "table": 87.69,
+      "latency_p50_ms": 32038,
+      "latency_p95_ms": 52619,
+      "cost_per_1k_pages_usd": 6.25,
+      "documents": 199,
+      "failed": 0,
+      "by_category": {
+        "academic_literature": {
+          "overall": 74.46,
+          "documents": 4
+        },
+        "book": {
+          "overall": 77.03,
+          "documents": 4
+        },
+        "chart": {
+          "overall": 91.73,
+          "documents": 6
+        },
+        "colorful_textbook": {
+          "overall": 56.45,
+          "documents": 4
+        },
+        "complex_table": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "dense": {
+          "overall": 99.95,
+          "documents": 3
+        },
+        "equation": {
+          "overall": 96.82,
+          "documents": 5
+        },
+        "exam_paper": {
+          "overall": 46.59,
+          "documents": 4
+        },
+        "faded": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "figure": {
+          "overall": 93.75,
+          "documents": 5
+        },
+        "headers_footers": {
+          "overall": 8.33,
+          "documents": 8
+        },
+        "headings": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "historical_document": {
+          "overall": 45.12,
+          "documents": 4
+        },
+        "index": {
+          "overall": 97.65,
+          "documents": 3
+        },
+        "invoice": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "list": {
+          "overall": 97.1,
+          "documents": 4
+        },
+        "long_tiny_text": {
+          "overall": 77.71,
+          "documents": 8
+        },
+        "low_res": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "magazine": {
+          "overall": 52.73,
+          "documents": 4
+        },
+        "multi_column": {
+          "overall": 73.75,
+          "documents": 8
+        },
+        "multipage": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "newspaper": {
+          "overall": 59.36,
+          "documents": 4
+        },
+        "noisy_scan": {
+          "overall": 99.42,
+          "documents": 3
+        },
+        "note": {
+          "overall": 91.43,
+          "documents": 4
+        },
+        "old_scans": {
+          "overall": 61.3,
+          "documents": 8
+        },
+        "plain": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "ppt2pdf": {
+          "overall": 74.28,
+          "documents": 4
+        },
+        "receipt": {
+          "overall": 99.87,
+          "documents": 3
+        },
+        "research_report": {
+          "overall": 74.04,
+          "documents": 4
+        },
+        "skewed": {
+          "overall": 80.99,
+          "documents": 3
+        },
+        "table": {
+          "overall": 85.8,
+          "documents": 38
+        },
+        "table_tests": {
+          "overall": 88.54,
+          "documents": 8
+        },
+        "text": {
+          "overall": 83.17,
+          "documents": 22
+        },
+        "two_column": {
+          "overall": 100.0,
+          "documents": 3
+        }
+      }
+    },
+    "extend/parse_performance": {
+      "overall": 80.77,
+      "table": 88.54,
+      "latency_p50_ms": 21965,
+      "latency_p95_ms": 33103,
+      "cost_per_1k_pages_usd": 25.0,
+      "documents": 199,
+      "failed": 0,
+      "by_category": {
+        "academic_literature": {
+          "overall": 78.24,
+          "documents": 4
+        },
+        "book": {
+          "overall": 76.91,
+          "documents": 4
+        },
+        "chart": {
+          "overall": 93.72,
+          "documents": 6
+        },
+        "colorful_textbook": {
+          "overall": 57.35,
+          "documents": 4
+        },
+        "complex_table": {
+          "overall": 99.64,
+          "documents": 3
+        },
+        "dense": {
+          "overall": 99.95,
+          "documents": 3
+        },
+        "equation": {
+          "overall": 96.98,
+          "documents": 5
+        },
+        "exam_paper": {
+          "overall": 47.42,
+          "documents": 4
+        },
+        "faded": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "figure": {
+          "overall": 93.75,
+          "documents": 5
+        },
+        "headers_footers": {
+          "overall": 5.21,
+          "documents": 8
+        },
+        "headings": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "historical_document": {
+          "overall": 41.55,
+          "documents": 4
+        },
+        "index": {
+          "overall": 99.86,
+          "documents": 3
+        },
+        "invoice": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "list": {
+          "overall": 97.43,
+          "documents": 4
+        },
+        "long_tiny_text": {
+          "overall": 90.92,
+          "documents": 8
+        },
+        "low_res": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "magazine": {
+          "overall": 53.18,
+          "documents": 4
+        },
+        "multi_column": {
+          "overall": 83.13,
+          "documents": 8
+        },
+        "multipage": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "newspaper": {
+          "overall": 61.54,
+          "documents": 4
+        },
+        "noisy_scan": {
+          "overall": 99.66,
+          "documents": 3
+        },
+        "note": {
+          "overall": 91.79,
+          "documents": 4
+        },
+        "old_scans": {
+          "overall": 58.8,
+          "documents": 8
+        },
+        "plain": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "ppt2pdf": {
+          "overall": 77.62,
+          "documents": 4
+        },
+        "receipt": {
+          "overall": 99.94,
+          "documents": 3
+        },
+        "research_report": {
+          "overall": 73.68,
+          "documents": 4
+        },
+        "skewed": {
+          "overall": 83.93,
+          "documents": 3
+        },
+        "table": {
+          "overall": 86.71,
+          "documents": 38
+        },
+        "table_tests": {
+          "overall": 92.71,
+          "documents": 8
+        },
+        "text": {
+          "overall": 79.08,
+          "documents": 22
+        },
+        "two_column": {
+          "overall": 100.0,
+          "documents": 3
+        }
+      }
+    },
+    "llamaparse/agentic": {
+      "overall": 85.28,
+      "table": 88.54,
+      "latency_p50_ms": 14127,
+      "latency_p95_ms": 29269,
+      "cost_per_1k_pages_usd": 12.5,
+      "documents": 199,
+      "failed": 0,
+      "by_category": {
+        "academic_literature": {
+          "overall": 83.36,
+          "documents": 4
+        },
+        "book": {
+          "overall": 82.75,
+          "documents": 4
+        },
+        "chart": {
+          "overall": 71.29,
+          "documents": 6
+        },
+        "colorful_textbook": {
+          "overall": 73.91,
+          "documents": 4
+        },
+        "complex_table": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "dense": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "equation": {
+          "overall": 95.0,
+          "documents": 5
+        },
+        "exam_paper": {
+          "overall": 54.86,
+          "documents": 4
+        },
+        "faded": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "figure": {
+          "overall": 84.93,
+          "documents": 5
+        },
+        "headers_footers": {
+          "overall": 19.79,
+          "documents": 8
+        },
+        "headings": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "historical_document": {
+          "overall": 57.33,
+          "documents": 4
+        },
+        "index": {
+          "overall": 99.95,
+          "documents": 3
+        },
+        "invoice": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "list": {
+          "overall": 98.86,
+          "documents": 4
+        },
+        "long_tiny_text": {
+          "overall": 93.6,
+          "documents": 8
+        },
+        "low_res": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "magazine": {
+          "overall": 80.39,
+          "documents": 4
+        },
+        "multi_column": {
+          "overall": 96.88,
+          "documents": 8
+        },
+        "multipage": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "newspaper": {
+          "overall": 85.7,
+          "documents": 4
+        },
+        "noisy_scan": {
+          "overall": 99.98,
+          "documents": 3
+        },
+        "note": {
+          "overall": 92.27,
+          "documents": 4
+        },
+        "old_scans": {
+          "overall": 70.57,
+          "documents": 8
+        },
+        "plain": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "ppt2pdf": {
+          "overall": 79.6,
+          "documents": 4
+        },
+        "receipt": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "research_report": {
+          "overall": 83.77,
+          "documents": 4
+        },
+        "skewed": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "table": {
+          "overall": 88.56,
+          "documents": 38
+        },
+        "table_tests": {
+          "overall": 81.25,
+          "documents": 8
+        },
+        "text": {
+          "overall": 90.46,
+          "documents": 22
+        },
+        "two_column": {
+          "overall": 100.0,
+          "documents": 3
+        }
+      }
+    },
+    "llamaparse/cost_effective": {
+      "overall": 85.63,
+      "table": 86.64,
+      "latency_p50_ms": 9452,
+      "latency_p95_ms": 19494,
+      "cost_per_1k_pages_usd": 3.75,
+      "documents": 199,
+      "failed": 0,
+      "by_category": {
+        "academic_literature": {
+          "overall": 77.56,
+          "documents": 4
+        },
+        "book": {
+          "overall": 83.84,
+          "documents": 4
+        },
+        "chart": {
+          "overall": 70.73,
+          "documents": 6
+        },
+        "colorful_textbook": {
+          "overall": 85.89,
+          "documents": 4
+        },
+        "complex_table": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "dense": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "equation": {
+          "overall": 94.6,
+          "documents": 5
+        },
+        "exam_paper": {
+          "overall": 77.01,
+          "documents": 4
+        },
+        "faded": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "figure": {
+          "overall": 88.15,
+          "documents": 5
+        },
+        "headers_footers": {
+          "overall": 25.0,
+          "documents": 8
+        },
+        "headings": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "historical_document": {
+          "overall": 70.91,
+          "documents": 4
+        },
+        "index": {
+          "overall": 99.86,
+          "documents": 3
+        },
+        "invoice": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "list": {
+          "overall": 98.83,
+          "documents": 4
+        },
+        "long_tiny_text": {
+          "overall": 96.13,
+          "documents": 8
+        },
+        "low_res": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "magazine": {
+          "overall": 72.26,
+          "documents": 4
+        },
+        "multi_column": {
+          "overall": 88.13,
+          "documents": 8
+        },
+        "multipage": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "newspaper": {
+          "overall": 86.9,
+          "documents": 4
+        },
+        "noisy_scan": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "note": {
+          "overall": 93.12,
+          "documents": 4
+        },
+        "old_scans": {
+          "overall": 66.3,
+          "documents": 8
+        },
+        "plain": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "ppt2pdf": {
+          "overall": 89.27,
+          "documents": 4
+        },
+        "receipt": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "research_report": {
+          "overall": 84.6,
+          "documents": 4
+        },
+        "skewed": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "table": {
+          "overall": 87.75,
+          "documents": 38
+        },
+        "table_tests": {
+          "overall": 81.25,
+          "documents": 8
+        },
+        "text": {
+          "overall": 87.9,
+          "documents": 22
+        },
+        "two_column": {
+          "overall": 100.0,
+          "documents": 3
+        }
+      }
+    },
+    "reducto/r-1": {
+      "overall": 82.8,
+      "table": 90.18,
+      "latency_p50_ms": 3459,
+      "latency_p95_ms": 9305,
+      "cost_per_1k_pages_usd": 10.0,
+      "documents": 199,
+      "failed": 0,
+      "by_category": {
+        "academic_literature": {
+          "overall": 75.01,
+          "documents": 4
+        },
+        "book": {
+          "overall": 81.22,
+          "documents": 4
+        },
+        "chart": {
+          "overall": 58.49,
+          "documents": 6
+        },
+        "colorful_textbook": {
+          "overall": 70.44,
+          "documents": 4
+        },
+        "complex_table": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "dense": {
+          "overall": 99.99,
+          "documents": 3
+        },
+        "equation": {
+          "overall": 95.6,
+          "documents": 5
+        },
+        "exam_paper": {
+          "overall": 46.72,
+          "documents": 4
+        },
+        "faded": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "figure": {
+          "overall": 79.81,
+          "documents": 5
+        },
+        "headers_footers": {
+          "overall": 14.58,
+          "documents": 8
+        },
+        "headings": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "historical_document": {
+          "overall": 76.37,
+          "documents": 4
+        },
+        "index": {
+          "overall": 95.88,
+          "documents": 3
+        },
+        "invoice": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "list": {
+          "overall": 99.58,
+          "documents": 4
+        },
+        "long_tiny_text": {
+          "overall": 94.67,
+          "documents": 8
+        },
+        "low_res": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "magazine": {
+          "overall": 58.22,
+          "documents": 4
+        },
+        "multi_column": {
+          "overall": 83.13,
+          "documents": 8
+        },
+        "multipage": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "newspaper": {
+          "overall": 64.29,
+          "documents": 4
+        },
+        "noisy_scan": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "note": {
+          "overall": 93.36,
+          "documents": 4
+        },
+        "old_scans": {
+          "overall": 66.28,
+          "documents": 8
+        },
+        "plain": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "ppt2pdf": {
+          "overall": 88.72,
+          "documents": 4
+        },
+        "receipt": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "research_report": {
+          "overall": 83.39,
+          "documents": 4
+        },
+        "skewed": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "table": {
+          "overall": 89.17,
+          "documents": 38
+        },
+        "table_tests": {
+          "overall": 89.58,
+          "documents": 8
+        },
+        "text": {
+          "overall": 83.56,
+          "documents": 22
+        },
+        "two_column": {
+          "overall": 100.0,
+          "documents": 3
+        }
+      }
+    },
+    "reducto/standard": {
+      "overall": 80.29,
+      "table": 87.88,
+      "latency_p50_ms": 3019,
+      "latency_p95_ms": 8443,
+      "cost_per_1k_pages_usd": 15.0,
+      "documents": 199,
+      "failed": 0,
+      "by_category": {
+        "academic_literature": {
+          "overall": 78.92,
+          "documents": 4
+        },
+        "book": {
+          "overall": 76.59,
+          "documents": 4
+        },
+        "chart": {
+          "overall": 58.33,
+          "documents": 6
+        },
+        "colorful_textbook": {
+          "overall": 63.15,
+          "documents": 4
+        },
+        "complex_table": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "dense": {
+          "overall": 99.95,
+          "documents": 3
+        },
+        "equation": {
+          "overall": 93.21,
+          "documents": 5
+        },
+        "exam_paper": {
+          "overall": 54.25,
+          "documents": 4
+        },
+        "faded": {
+          "overall": 99.95,
+          "documents": 3
+        },
+        "figure": {
+          "overall": 80.3,
+          "documents": 5
+        },
+        "headers_footers": {
+          "overall": 11.46,
+          "documents": 8
+        },
+        "headings": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "historical_document": {
+          "overall": 16.8,
+          "documents": 4
+        },
+        "index": {
+          "overall": 98.02,
+          "documents": 3
+        },
+        "invoice": {
+          "overall": 99.86,
+          "documents": 3
+        },
+        "list": {
+          "overall": 99.53,
+          "documents": 4
+        },
+        "long_tiny_text": {
+          "overall": 84.11,
+          "documents": 8
+        },
+        "low_res": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "magazine": {
+          "overall": 67.33,
+          "documents": 4
+        },
+        "multi_column": {
+          "overall": 83.13,
+          "documents": 8
+        },
+        "multipage": {
+          "overall": 99.9,
+          "documents": 3
+        },
+        "newspaper": {
+          "overall": 64.43,
+          "documents": 4
+        },
+        "noisy_scan": {
+          "overall": 99.86,
+          "documents": 3
+        },
+        "note": {
+          "overall": 90.7,
+          "documents": 4
+        },
+        "old_scans": {
+          "overall": 62.6,
+          "documents": 8
+        },
+        "plain": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "ppt2pdf": {
+          "overall": 81.03,
+          "documents": 4
+        },
+        "receipt": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "research_report": {
+          "overall": 86.76,
+          "documents": 4
+        },
+        "skewed": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "table": {
+          "overall": 88.73,
+          "documents": 38
+        },
+        "table_tests": {
+          "overall": 85.42,
+          "documents": 8
+        },
+        "text": {
+          "overall": 80.14,
+          "documents": 22
+        },
+        "two_column": {
+          "overall": 100.0,
+          "documents": 3
+        }
+      }
+    },
+    "tesseract/default": {
+      "overall": 56.41,
+      "table": 0.67,
+      "latency_p50_ms": 5381,
+      "latency_p95_ms": 26893,
+      "cost_per_1k_pages_usd": 0.0,
+      "documents": 199,
+      "failed": 0,
+      "by_category": {
+        "academic_literature": {
+          "overall": 14.93,
+          "documents": 4
+        },
+        "book": {
+          "overall": 50.58,
+          "documents": 4
+        },
+        "chart": {
+          "overall": 66.3,
+          "documents": 6
+        },
+        "colorful_textbook": {
+          "overall": 44.33,
+          "documents": 4
+        },
+        "complex_table": {
+          "overall": 99.88,
+          "documents": 3
+        },
+        "dense": {
+          "overall": 99.56,
+          "documents": 3
+        },
+        "equation": {
+          "overall": 93.93,
+          "documents": 5
+        },
+        "exam_paper": {
+          "overall": 32.87,
+          "documents": 4
+        },
+        "faded": {
+          "overall": 99.15,
+          "documents": 3
+        },
+        "figure": {
+          "overall": 85.53,
+          "documents": 5
+        },
+        "headers_footers": {
+          "overall": 28.13,
+          "documents": 8
+        },
+        "headings": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "historical_document": {
+          "overall": 5.83,
+          "documents": 4
+        },
+        "index": {
+          "overall": 71.91,
+          "documents": 3
+        },
+        "invoice": {
+          "overall": 100.0,
+          "documents": 3
+        },
+        "list": {
+          "overall": 95.23,
+          "documents": 4
+        },
+        "long_tiny_text": {
+          "overall": 80.24,
+          "documents": 8
+        },
+        "low_res": {
+          "overall": 99.92,
+          "documents": 3
+        },
+        "magazine": {
+          "overall": 59.94,
+          "documents": 4
+        },
+        "multi_column": {
+          "overall": 61.25,
+          "documents": 8
+        },
+        "multipage": {
+          "overall": 99.53,
+          "documents": 3
+        },
+        "newspaper": {
+          "overall": 50.61,
+          "documents": 4
+        },
+        "noisy_scan": {
+          "overall": 97.88,
+          "documents": 3
+        },
+        "note": {
+          "overall": 2.1,
+          "documents": 4
+        },
+        "old_scans": {
+          "overall": 38.75,
+          "documents": 8
+        },
+        "plain": {
+          "overall": 99.98,
+          "documents": 3
+        },
+        "ppt2pdf": {
+          "overall": 50.63,
+          "documents": 4
+        },
+        "receipt": {
+          "overall": 97.72,
+          "documents": 3
+        },
+        "research_report": {
+          "overall": 45.19,
+          "documents": 4
+        },
+        "skewed": {
+          "overall": 80.1,
+          "documents": 3
+        },
+        "table": {
+          "overall": 31.44,
+          "documents": 38
+        },
+        "table_tests": {
+          "overall": 0.0,
+          "documents": 8
+        },
+        "text": {
+          "overall": 69.27,
+          "documents": 22
+        },
+        "two_column": {
+          "overall": 100.0,
+          "documents": 3
+        }
+      }
+    }
+  }
+}

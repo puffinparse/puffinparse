@@ -30,6 +30,17 @@ pub enum BenchCommand {
     /// summaries. Latency, cost, pages, errors and models are preserved; `scorer_version` is set to
     /// the current scorer.
     Rescore(RescoreArgs),
+    /// Write the compact benchmark evidence that `recommend_models` ships with (no network).
+    ///
+    /// Reads one result JSON (the newest `combined-v*` run) and writes per-model Overall, table
+    /// score, latency, cost and per-category Overall. `make evidence` runs this.
+    Evidence {
+        /// Result JSON written by `bench run`.
+        result: PathBuf,
+        /// Where to write (default: stdout).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(clap::Args, Debug)]
@@ -298,6 +309,7 @@ pub async fn run(cmd: BenchCommand) -> Result<()> {
         BenchCommand::Run(args) => run_bench(args).await,
         BenchCommand::Report(args) => report(args),
         BenchCommand::Rescore(args) => rescore(args),
+        BenchCommand::Evidence { result, out } => evidence(&result, out.as_deref()),
         BenchCommand::Score { prediction, truth } => {
             let p =
                 std::fs::read_to_string(&prediction).with_context(|| format!("reading {}", prediction.display()))?;
@@ -306,6 +318,21 @@ pub async fn run(cmd: BenchCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn evidence(result: &Path, out: Option<&Path>) -> Result<()> {
+    let raw = std::fs::read_to_string(result).with_context(|| format!("reading {}", result.display()))?;
+    let run: RunResult = serde_json::from_str(&raw).with_context(|| format!("parsing {}", result.display()))?;
+    // Record the source relative to the repository root, the way the evidence test finds it.
+    let source = result.to_string_lossy().replace('\\', "/");
+    let source = source.find("benchmark/results/").map_or(source.as_str(), |i| &source[i..]).to_string();
+    let ev = crate::eval::recommend::evidence_from_run(&run, &source);
+    let json = serde_json::to_string_pretty(&ev)? + "\n";
+    match out {
+        Some(p) => std::fs::write(p, json).with_context(|| format!("writing {}", p.display()))?,
+        None => print!("{json}"),
+    }
+    Ok(())
 }
 
 fn load_manifest(dir: &Path) -> Result<(Manifest, String)> {
@@ -536,7 +563,7 @@ fn uuid_like(now: &chrono::DateTime<chrono::Utc>) -> String {
 }
 
 /// Provider options that defeat server-side result caches, so measured latency is real work.
-fn cache_busting_options(model: &str) -> Option<serde_json::Value> {
+pub(crate) fn cache_busting_options(model: &str) -> Option<serde_json::Value> {
     match model.split('/').next() {
         Some("llamaparse") => Some(serde_json::json!({ "do_not_cache": true, "invalidate_cache": true })),
         _ => None,

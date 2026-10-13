@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PuffinParse run viewer</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="beak" aria-hidden="true"></span>PuffinParse <span class="muted">run viewer</span></div>
+  <div id="run-meta" class="muted"></div>
+</header>
+<section class="summary" aria-label="Models">
+  <table id="models"><thead><tr>
+    <th>Model</th><th class="n">OK</th><th class="n">Failed</th><th class="n" title="Share of words in common with the other models on the same document">Agreement</th>
+    <th class="n" title="The same, for tokens with digits">Numbers</th><th class="n">Checked correct</th><th class="n">p50</th>
+    <th class="n">$/1k pages</th><th class="n">Monthly</th><th>Status</th>
+  </tr></thead><tbody></tbody></table>
+  <p class="note">Agreement shows where models read the same thing; it is not accuracy. Check the documents at the top of the list against the original and record a verdict.</p>
+</section>
+<main class="work">
+  <nav class="docs" aria-label="Documents">
+    <div class="docs-head">
+      <label for="sort">Sort</label>
+      <select id="sort"><option value="disagreement">Most disagreement</option><option value="name">Name</option><option value="unreviewed">Unchecked first</option></select>
+    </div>
+    <ol id="doc-list"></ol>
+  </nav>
+  <section class="original" aria-label="Original document">
+    <div class="pane-head"><span id="doc-title">Select a document</span> <a id="doc-open" target="_blank" rel="noopener">open</a></div>
+    <div id="doc-frame" class="frame"></div>
+  </section>
+  <section class="outputs" aria-label="Model outputs">
+    <div class="pane-head">
+      <div id="tabs" role="tablist"></div>
+      <div class="view-modes">
+        <select id="mode" aria-label="View"><option value="rendered">Rendered</option><option value="raw">Markdown</option><option value="diff">Diff</option></select>
+        <select id="against" aria-label="Diff against" hidden></select>
+      </div>
+    </div>
+    <div id="output-meta" class="muted"></div>
+    <article id="output" class="md"></article>
+    <form id="review" class="review" hidden>
+      <span class="label">Your check</span>
+      <div id="verdicts"></div>
+      <input id="notes" type="text" placeholder="Notes (optional)" maxlength="2000">
+      <button type="submit">Save</button>
+      <span id="review-state" class="muted"></span>
+    </form>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

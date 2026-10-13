@@ -49,7 +49,9 @@ crates/puffinparse-core/src/
   router.rs       ordered / round-robin fallbacks, stats
   bench.rs        normalisation + metrics + summaries
   util.rs         deep_merge, page-range parsing
-crates/puffinparse-cli/src/   main.rs (parse, ocr, extract, providers, serve), bench.rs (run, report, score, rescore)
+crates/puffinparse-cli/src/   main.rs (parse, ocr, extract, providers, serve), bench.rs (run, report, score, rescore, evidence),
+                  mcp/ (stdio MCP server; eval_tools.rs = dataset tools + find_best_model prompt),
+                  eval/ (scan, recommend + evidence.json + data_handling.json, run, analyze, view/ local viewer, anonymize)
 crates/puffinparse-server/src/ api.rs (routes, auth, fallback loop), config.rs, usage.rs, metrics.rs, log.rs
 crates/puffinparse-python/    PyO3 module `puffinparse._core`
 python/puffinparse/           public API, types, exceptions; python/tests/
