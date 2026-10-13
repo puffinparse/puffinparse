@@ -91,7 +91,9 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         assert!(reachable(&format!("http://127.0.0.1:{port}/v1")));
         drop(listener);
-        assert!(!reachable(&format!("http://127.0.0.1:{port}")));
+        // Not the port just freed: a test running in parallel can be given it straight away.
+        // Port 1 (tcpmux) is privileged and has no listener on a developer machine or a CI runner.
+        assert!(!reachable("http://127.0.0.1:1"));
         assert!(!reachable("not a url"));
     }
 
