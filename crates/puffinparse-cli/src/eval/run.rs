@@ -884,7 +884,9 @@ mod tests {
 
     #[test]
     fn a_moved_dataset_still_finds_its_documents() {
-        let dir = dataset(1);
+        // Canonical, so the prefix matches the run folder's own (canonical) path on macOS, where
+        // the temp dir is a symlink into /private.
+        let dir = std::fs::canonicalize(dataset(1)).unwrap();
         let (_, m) = plan(&spec(&dir, &["tesseract"]), &Via::Keys).unwrap();
         let prep = prepare_new(&spec(&dir, &["tesseract"]), &Via::Keys, m).unwrap();
         let moved = tempdir("run-moved");
