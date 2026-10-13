@@ -95,7 +95,7 @@ stdio, built into the CLI. It gives an agent five tools for single documents and
 | `scan_dataset` | `path`. Counts the documents in a local folder: pages, file types, the largest files, reference transcripts, earlier runs. No network. |
 | `recommend_models` | `monthly_pages`, `max_usd_per_1k_pages`, `error_tolerance` (`low`, `medium`, `high`), `priority` (`accuracy`, `balanced`, `cost`, `speed`), `zdr_required`, `local_only`, `needs` (`tables`, `scans`, `forms`, ...), `top`. A shortlist from the public benchmark, list prices and each provider's data handling, with the monthly cost and whether the key is set. No network. |
 | `run_dataset` | `dataset`, `models`, `max_cost_usd` (required for priced models), optional `pages`, `limit`, `filter`, `via` (`keys` or `gateway`), `dry_run`, `resume`. Runs every model over every document in the background and saves each output; returns the run folder. |
-| `run_status`, `cancel_run` | Progress, spend and failures of a run; stop it. |
+| `run_status`, `cancel_run` | Progress, spend and failures of a run; stop it. `run_status` waits for a running run (up to `wait_seconds`, default 30), so the agent never has to sleep between checks. |
 | `analyze_run` | Per model: failures, agreement with the other models, latency, cost, monthly cost at your volume, your reviews, scores against reference transcripts, and a queue of documents worth checking by eye. `write_report` writes `report.md`. |
 | `get_output` | One document's output from every model, next to the path of the original. |
 | `record_review` | `doc`, `model`, `verdict` (`correct`, `minor_errors`, `major_errors`, `unusable`), `notes`. |
@@ -184,7 +184,8 @@ raise `tool_timeout_sec`.
 
 Benchmarks rank models on someone else's documents. To pick one for yours, point your agent at a
 folder of documents that covers your use case (around 100 is plenty) and ask it to use the
-`find_best_model` prompt, or just say "find the best parsing model for the documents in ~/docs".
+`find_best_model` prompt (optional arguments: `dataset`, and `requirements` such as "20,000 pages a
+month, under $10 per 1,000 pages, no ZDR needed" to skip those questions), or just say "find the best parsing model for the documents in ~/docs".
 In Claude Code the prompt is `/mcp__puffinparse__find_best_model`. The agent then:
 
 1. Scans the folder (`scan_dataset`) and tells you what is in it.

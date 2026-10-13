@@ -282,6 +282,10 @@ pub struct Recommendation {
     pub notes: Vec<String>,
 }
 
+fn provider_needs_key(provider: &str) -> bool {
+    core::model::provider_info(provider).is_some_and(|p| p.key_required())
+}
+
 fn key_ready(p: &core::ProviderInfo) -> bool {
     !p.key_required() || std::env::var(p.env_var).map(|v| !v.trim().is_empty()).unwrap_or(false)
 }
@@ -413,7 +417,9 @@ pub fn recommend(req: &Requirements, top_n: usize, allowed: &dyn Fn(&str) -> boo
             why.push_str(&format!(", {n:.1} on the categories you need"));
         }
         c.reasons.push(why);
-        if contender(c) {
+        if (best - q).abs() < 0.05 {
+            c.reasons.push("the best match for your needs in the benchmark".into());
+        } else if contender(c) {
             c.reasons.push(format!("within {tol:.0} points of the best match ({best:.1})"));
         } else {
             c.reasons.push(format!("{:.1} points behind the best match", best - q));
@@ -430,18 +436,28 @@ pub fn recommend(req: &Requirements, top_n: usize, allowed: &dyn Fn(&str) -> boo
     if chosen.len() < top_n {
         // Fill with models the benchmark has not measured: one per provider (its default parse
         // model), ready providers first, then verified ones, then by price.
-        let mut extra: Vec<Candidate> = untested
-            .into_iter()
-            .filter(|c| core::ModelRef::parse_for(&c.provider, Mode::Parse).is_ok_and(|d| d.qualified() == c.model))
-            .filter(|c| !chosen.iter().any(|k| k.provider == c.provider))
-            .collect();
+        // model), ready providers first, then verified ones, then by price; then, if that is still
+        // too few, the providers' other models.
+        let is_default =
+            |c: &Candidate| core::ModelRef::parse_for(&c.provider, Mode::Parse).is_ok_and(|d| d.qualified() == c.model);
+        let mut extra: Vec<Candidate> =
+            untested.into_iter().filter(|c| !chosen.iter().any(|k| k.provider == c.provider)).collect();
         extra.sort_by(|a, b| {
-            b.key_ready
-                .cmp(&a.key_ready)
+            is_default(b)
+                .cmp(&is_default(a))
+                .then(b.key_ready.cmp(&a.key_ready))
                 .then(verification_rank(a.verification).cmp(&verification_rank(b.verification)))
                 .then(price_key(a).total_cmp(&price_key(b)))
         });
-        for mut c in extra.into_iter().take(top_n - chosen.len()) {
+        let mut seen: Vec<String> = Vec::new();
+        let (firsts, rest): (Vec<Candidate>, Vec<Candidate>) = extra.into_iter().partition(|c| {
+            let first = !seen.contains(&c.provider);
+            if first {
+                seen.push(c.provider.clone());
+            }
+            first
+        });
+        for mut c in firsts.into_iter().chain(rest).take(top_n - chosen.len()) {
             c.reasons.push("not in the benchmark yet: your own run is the only evidence".into());
             if let Some(pr) = c.usd_per_1k_pages {
                 c.reasons.push(format!("${pr}/1k pages at list price"));
@@ -451,8 +467,19 @@ pub fn recommend(req: &Requirements, top_n: usize, allowed: &dyn Fn(&str) -> boo
     }
     for (i, c) in chosen.iter_mut().enumerate() {
         c.rank = i + 1;
-        if c.key_ready {
-            c.reasons.push("ready: its key is set (or it needs none)".into());
+        let (provider, model) = c.model.split_once('/').unwrap_or((c.model.as_str(), ""));
+        if let Some(Err(problem)) = super::local::status(provider, model) {
+            c.key_ready = false;
+            c.caveats.push(problem);
+        } else if c.key_ready {
+            c.reasons.push(
+                if c.env_var.is_some() && provider_needs_key(provider) {
+                    "ready: its key is set"
+                } else {
+                    "ready: runs on this machine"
+                }
+                .into(),
+            );
         } else if let Some(v) = c.env_var {
             c.caveats.push(format!("set {v} where the MCP server starts to run it"));
         }
@@ -652,6 +679,17 @@ mod tests {
         providers.dedup();
         assert_eq!(providers.len(), untested.len());
         assert!(untested.iter().all(|c| c.reasons.iter().any(|r| r.contains("not in the benchmark"))));
+    }
+
+    #[test]
+    fn a_short_list_is_filled_with_more_models_of_the_same_providers() {
+        let req = Requirements { local_only: true, ..Default::default() };
+        let r = recommend(&req, 12, &all);
+        let mut providers: Vec<&str> = r.candidates.iter().map(|c| c.provider.as_str()).collect();
+        providers.sort();
+        providers.dedup();
+        assert!(r.candidates.len() > providers.len(), "{} candidates", r.candidates.len());
+        assert_eq!(r.candidates[0].reasons.iter().filter(|r| r.contains("the best match")).count(), 1);
     }
 
     #[test]

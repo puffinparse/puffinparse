@@ -191,7 +191,7 @@ fn document(root: &Path, id: &str, meta: &std::fs::Metadata) -> Result<DatasetDo
     }
     let path = root.join(id);
     let pages = if kind == "pdf" {
-        std::fs::read(&path).ok().and_then(|bytes| puffinparse_server::pages::pdf_pages(&bytes))
+        std::fs::read(&path).ok().and_then(|bytes| puffinparse_server::pages::pdf_pages_estimate(&bytes))
     } else if IMAGE_EXTENSIONS.contains(&kind.as_str()) {
         Some(1)
     } else {

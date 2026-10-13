@@ -51,7 +51,7 @@ pub async fn call(cfg: &Config, name: &str, args: &Map<String, Value>) -> Option
         "scan_dataset" => scan_dataset(cfg, args),
         "recommend_models" => recommend_models(cfg, args),
         "run_dataset" => run_dataset(cfg, args),
-        "run_status" => run_status(cfg, args),
+        "run_status" => run_status(cfg, args).await,
         "cancel_run" => cancel_run(cfg, args),
         "analyze_run" => analyze_run(cfg, args).await,
         "get_output" => get_output(cfg, args),
@@ -323,6 +323,7 @@ fn run_dataset(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutput, St
     // Tests hand the mock providers their keys through `Config::endpoints`.
     #[cfg(test)]
     let missing: Vec<String> = missing.into_iter().filter(|_| cfg.endpoints.is_empty()).collect();
+    let down = local_engines_down(&manifest.models, &via);
     let est = manifest.estimate.clone();
     let plan_json = json!({
         "dataset": manifest.dataset_root,
@@ -336,16 +337,18 @@ fn run_dataset(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutput, St
         "unknown_page_documents": est.unknown_page_documents,
         "via": via.name(),
         "missing_keys": missing,
+        "engines_not_running": down,
     });
     if a.bool("dry_run")?.unwrap_or(false) {
         let text = format!(
             "Plan: {} documents x {} models = {} calls, estimated ${:.2} at list price. Nothing was sent. Show the \
-             user this estimate and start the run with max_cost_usd once they agree.{} {plan_json}",
+             user this estimate and start the run with max_cost_usd once they agree.{}{} {plan_json}",
             est.documents,
             manifest.models.len(),
             est.calls,
             est.total_usd,
-            if missing.is_empty() { String::new() } else { format!(" Missing keys: {}.", missing.join(", ")) }
+            if missing.is_empty() { String::new() } else { format!(" Missing keys: {}.", missing.join(", ")) },
+            if down.is_empty() { String::new() } else { format!(" Not running: {}.", down.join("; ")) }
         );
         return ok(json!({ "dry_run": true, "plan": plan_json }), text);
     }
@@ -355,6 +358,9 @@ fn run_dataset(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutput, St
              paste a key into the chat.",
             missing.join(", ")
         ));
+    }
+    if !down.is_empty() {
+        return Err(format!("local engines not reachable, start them or drop them from models: {}", down.join("; ")));
     }
     let prep = run::prepare_new(&spec, &via, manifest)?;
     let dir = prep.dir.clone();
@@ -390,15 +396,36 @@ fn missing_keys(models: &[String], via: &run::Via) -> Vec<String> {
     out
 }
 
+/// Local engines among `models` that cannot be used right now (a gateway runs them on its side).
+fn local_engines_down(models: &[String], via: &run::Via) -> Vec<String> {
+    if matches!(via, run::Via::Gateway { .. }) || cfg!(test) {
+        return Vec::new();
+    }
+    models
+        .iter()
+        .filter_map(|m| {
+            let (provider, model) = m.split_once('/').unwrap_or((m.as_str(), ""));
+            match crate::eval::local::status(provider, model) {
+                Some(Err(e)) => Some(format!("{m}: {e}")),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 fn check_models(cfg: &Config, models: &[String], via: &run::Via) -> Result<(), String> {
     for m in models {
         super::tools::resolve_model(cfg, m, Mode::Parse)?;
     }
     let missing = missing_keys(models, via);
-    if missing.is_empty() {
+    if !missing.is_empty() {
+        return Err(format!("set {} where this MCP server starts, then restart it", missing.join(", ")));
+    }
+    let down = local_engines_down(models, via);
+    if down.is_empty() {
         Ok(())
     } else {
-        Err(format!("set {} where this MCP server starts, then restart it", missing.join(", ")))
+        Err(format!("local engines not reachable, start them or drop them from models: {}", down.join("; ")))
     }
 }
 
@@ -444,11 +471,23 @@ fn caller_for(cfg: &Config, via: &run::Via) -> run::Caller {
     })
 }
 
-fn run_status(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutput, String> {
-    let a = Args::new(args, &["run"])?;
+/// How long `run_status` waits for a running run by default, and at most (seconds). Short enough
+/// for clients' tool-call timeouts, long enough that an agent never needs to sleep between checks.
+const STATUS_WAIT_DEFAULT: usize = 30;
+const STATUS_WAIT_MAX: usize = 50;
+
+async fn run_status(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutput, String> {
+    let a = Args::new(args, &["run", "wait_seconds"])?;
     let dir = run_dir(cfg, &a)?;
-    let manifest = run::load_manifest(&dir)?;
-    let live = cfg.eval.live(&dir);
+    let wait = a.count("wait_seconds", STATUS_WAIT_DEFAULT, STATUS_WAIT_MAX)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait as u64);
+    let mut manifest = run::load_manifest(&dir)?;
+    let mut live = cfg.eval.live(&dir);
+    while live.is_some() && manifest.status == run::RunStatus::Running && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        manifest = run::load_manifest(&dir)?;
+        live = cfg.eval.live(&dir);
+    }
     let executing = live.is_some() && manifest.status == run::RunStatus::Running;
     let progress = match (&live, executing) {
         (Some(p), true) => p.snapshot(),
@@ -465,7 +504,7 @@ fn run_status(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutput, Str
         "max_cost_usd": manifest.max_cost_usd,
     });
     let next = match status {
-        run::RunStatus::Running => "Still running; check again in a minute.",
+        run::RunStatus::Running => "Still running; call run_status again (it waits for the run, no need to sleep first).",
         run::RunStatus::Complete => "Done. Call analyze_run.",
         run::RunStatus::Interrupted => "The server stopped while this run was going. Resume it with run_dataset(resume=...).",
         run::RunStatus::BudgetStopped => "Stopped at the spending limit. analyze_run works on what finished; resume with a higher max_cost_usd only if the user agrees.",
@@ -474,8 +513,13 @@ fn run_status(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutput, Str
     ok(
         structured.clone(),
         format!(
-            "{:?}: {}/{} calls done, {} failed, ${:.2} spent. {next} {structured}",
-            status, progress.done, progress.total_calls, progress.failed, progress.spent_usd
+            "{:?}: {} of {} calls finished ({} succeeded, {} failed), ${:.2} spent. {next} {structured}",
+            status,
+            progress.done,
+            progress.total_calls,
+            progress.done.saturating_sub(progress.failed),
+            progress.failed,
+            progress.spent_usd
         ),
     )
 }
@@ -529,6 +573,14 @@ async fn analyze_run(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutp
                     "empty": d.empty, "agreement": d.agreement })
         })
         .collect();
+    let next = if queue.is_empty() {
+        "Every document worth checking has a verdict. If you have not yet, call analyze_run with write_report=true \
+         and your conclusion, then open_viewer so the user can check visually."
+    } else {
+        "For each document in review_queue: read the original file yourself, call get_output, compare each model's \
+         output with the page, and record_review a verdict per model. Then call analyze_run again with \
+         write_report=true and your conclusion, and open_viewer so the user can check visually."
+    };
     let mut docs: Vec<&analyze::DocReport> = analysis.per_doc.iter().collect();
     docs.sort_by(|x, y| y.disagreement.unwrap_or(0.0).total_cmp(&x.disagreement.unwrap_or(0.0)));
     let structured = json!({
@@ -542,9 +594,7 @@ async fn analyze_run(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutp
         "per_doc": docs.into_iter().take(max_docs).collect::<Vec<_>>(),
         "notes": analysis.notes,
         "report": report_path,
-        "next": "For each document in review_queue: read the original file yourself, call get_output, compare each \
-                 model's output with the page, and record_review a verdict per model. Then call analyze_run again \
-                 with write_report=true and your conclusion, and open_viewer so the user can check visually.",
+        "next": next,
     });
     ok(structured.clone(), format!("{report}\n\n{structured}"))
 }
@@ -748,8 +798,13 @@ pub(crate) fn definitions(features: Features) -> Vec<Value> {
         t(
             "run_status",
             "Check a run",
-            "Progress of a run: calls done and failed per model, spend so far, recent errors, and what to do next.",
-            json!({ "type": "object", "properties": { "run": run_prop }, "required": ["run"] }),
+            "Progress of a run: calls finished and failed per model, spend so far, recent errors, and what to do next. \
+             While the run is going it waits (up to wait_seconds, default 30) and returns as soon as the run ends, so \
+             call it again instead of sleeping between checks.",
+            json!({ "type": "object", "properties": {
+                "run": run_prop,
+                "wait_seconds": { "type": "integer", "minimum": 0, "maximum": 50, "description": "Wait up to this long for a running run to finish (default 30; 0 returns at once)." }
+            }, "required": ["run"] }),
             &local,
         ),
         t(
@@ -841,7 +896,7 @@ pub const PROMPT_NAME: &str = "find_best_model";
 
 const WORKFLOW: &str = "Help me find the best document-parsing model for my own documents with the PuffinParse tools.
 
-1. Call scan_dataset on my folder{DATASET}. Tell me in two lines what is in it.
+1. Call scan_dataset on my folder{DATASET}. Tell me in two lines what is in it.{REQUIREMENTS}
 2. Ask me, in one short message, only what you still need: pages per month, budget per 1,000 pages, how many \
 errors I can live with, whether documents may leave my machine or need zero data retention, and what matters in \
 them (tables, scans, forms, handwriting, ...). If they may hold personal data, offer to anonymize them first with \
@@ -852,7 +907,7 @@ data handling, and whether its key is set. Ask which ones to run.
 to paste a key into the chat), or a PuffinParse gateway key if I have one.
 5. Call run_dataset with dry_run=true, show me the estimate, and start it with max_cost_usd only after I say yes. \
 For a large folder, suggest a first pass with pages=\"1-3\" or a limit.
-6. Follow it with run_status until it is done.
+6. Call run_status until it is done. Each call waits for the run (up to 30 seconds), so do not sleep or watch files in between.
 7. Call analyze_run. For the documents in review_queue (at least five, or all if fewer), read the original file \
 yourself, call get_output, compare each model with the page and record_review a verdict with a short note.
 8. Call analyze_run with write_report=true and your conclusion, then tell me: the model to use and the runner-up, \
@@ -865,7 +920,10 @@ pub fn prompt_definitions() -> Vec<Value> {
         "title": "Find the best model for my documents",
         "description": "Walks the agent through scanning your documents, asking a few questions, shortlisting models, \
                         running them with your keys, verifying the results and recommending one.",
-        "arguments": [{ "name": "dataset", "description": "Folder of representative documents (optional).", "required": false }],
+        "arguments": [
+            { "name": "dataset", "description": "Folder of representative documents (optional).", "required": false },
+            { "name": "requirements", "description": "What you already know, e.g. \"20,000 pages a month, under $10 per 1,000 pages, tables and scans, no ZDR needed\" (optional).", "required": false }
+        ],
     })]
 }
 
@@ -874,16 +932,15 @@ pub fn get_prompt(params: &Map<String, Value>) -> Result<Value, String> {
     if name != PROMPT_NAME {
         return Err(format!("Unknown prompt: {name}"));
     }
-    let dataset = params
-        .get("arguments")
-        .and_then(|a| a.get("dataset"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| format!(" ({s})"))
+    let arg = |k: &str| {
+        params.get("arguments").and_then(|a| a.get(k)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+    };
+    let dataset = arg("dataset").map(|s| format!(" ({s})")).unwrap_or_default();
+    let requirements = arg("requirements")
+        .map(|s| format!(" What I already know about my needs: {s}. Use it and skip those questions."))
         .unwrap_or_default();
     Ok(json!({
         "description": "Find the best document-parsing model for your documents",
-        "messages": [{ "role": "user", "content": { "type": "text", "text": WORKFLOW.replace("{DATASET}", &dataset) } }],
+        "messages": [{ "role": "user", "content": { "type": "text", "text": WORKFLOW.replace("{DATASET}", &dataset).replace("{REQUIREMENTS}", &requirements) } }],
     }))
 }

@@ -15,6 +15,7 @@
 pub mod analyze;
 pub mod anonymize;
 pub mod dataset;
+pub mod local;
 pub mod recommend;
 pub mod run;
 pub mod view;
@@ -300,6 +301,24 @@ async fn run_cmd(a: RunArgs) -> Result<()> {
         }
         if a.dry_run {
             return Ok(());
+        }
+        let down: Vec<String> = if a.gateway {
+            Vec::new()
+        } else {
+            manifest
+                .models
+                .iter()
+                .filter_map(|m| {
+                    let (provider, model) = m.split_once('/').unwrap_or((m.as_str(), ""));
+                    match local::status(provider, model) {
+                        Some(Err(e)) => Some(format!("{m}: {e}")),
+                        _ => None,
+                    }
+                })
+                .collect()
+        };
+        if !down.is_empty() {
+            bail!("local engines not reachable, start them or drop them from --models:\n  {}", down.join("\n  "));
         }
         if a.max_cost.is_none() && e.total_usd > 0.0 {
             bail!("pass --max-cost (at least ${:.2}) to start this run", e.total_usd);

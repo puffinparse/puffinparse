@@ -23,7 +23,10 @@ Python package `puffinparse` share a single version. Entries before the rename s
   the documents worth checking by hand. `view` is a local viewer (127.0.0.1, random link) with each
   document next to every model's output, a diff and a review form. `anonymize` writes image-only
   redacted copies using Tesseract on your machine. `bench evidence` / `make evidence` regenerate the
-  benchmark scores `recommend` uses. See ADR-27.
+  benchmark scores `recommend` uses. See ADR-27. Local engines (Tesseract, Docling,
+  PaddleOCR, vLLM) count as ready only when they can be reached, and a run refuses to start when
+  one cannot; a scan counts PDF pages from the page tree, so files saved with incremental updates
+  are not over-counted.
 - Website `/playground/`: pick a sample document (or, once a gateway is configured, upload a PDF or
   image) and compare up to three models' Markdown side by side, with latency, pages and cost.
   Samples are five redistributable documents from the newest `combined-v3` run with their committed

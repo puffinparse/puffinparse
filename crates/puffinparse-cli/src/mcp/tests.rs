@@ -645,10 +645,15 @@ async fn dataset_workflow_end_to_end() {
     let prompts = c.request(1, "prompts/list", json!({})).await;
     assert_eq!(prompts["result"]["prompts"][0]["name"], "find_best_model");
     let p = c
-        .request(2, "prompts/get", json!({ "name": "find_best_model", "arguments": { "dataset": "/data/docs" } }))
+        .request(
+            2,
+            "prompts/get",
+            json!({ "name": "find_best_model", "arguments": { "dataset": "/data/docs", "requirements": "5k pages a month" } }),
+        )
         .await;
     let msg = p["result"]["messages"][0]["content"]["text"].as_str().unwrap();
     assert!(msg.contains("scan_dataset on my folder (/data/docs)") && msg.contains("record_review"));
+    assert!(msg.contains("my needs: 5k pages a month.") && !msg.contains("{REQUIREMENTS}"));
     assert!(c.request(3, "prompts/get", json!({ "name": "nope" })).await["error"].is_object());
 
     let scan = c.call(4, "scan_dataset", json!({ "path": path })).await;
