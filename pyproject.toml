@@ -44,6 +44,9 @@ python-source = "python"
 module-name = "puffinparse._core"
 features = ["pyo3/extension-module"]
 strip = true
+# Release wheels also carry the `puffinparse` CLI (MCP server, eval, viewer), so `pip install
+# puffinparse` and `uvx puffinparse ...` give the command: scripts/stage_cli_for_wheel.py builds it
+# and adds `data = "python/puffinparse.data"` here before the build. Without it, the SDK alone.
 
 [tool.ruff]
 line-length = 110

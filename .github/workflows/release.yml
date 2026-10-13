@@ -97,6 +97,8 @@ jobs:
           name: third-party-licenses
 
       # manylinux_2_28: aws-lc-sys (rustls' crypto backend) needs a newer GCC than manylinux2014's.
+      # The CLI is built in the same container, so the `puffinparse` command in the wheel needs only
+      # glibc 2.28 (scripts/stage_cli_for_wheel.py; ADR-28).
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -104,9 +106,13 @@ jobs:
           manylinux: "2_28"
           args: --release --out dist
           sccache: "true"
+          before-script-linux: python3 scripts/stage_cli_for_wheel.py --target ${{ matrix.target }}-unknown-linux-gnu
 
-      - name: Wheel carries the licence files
-        run: python scripts/check_release_licenses.py dist/*.whl
+      - name: Wheel carries the licence files and the CLI
+        shell: bash
+        run: |
+          python scripts/check_release_licenses.py dist/*.whl
+          python -c "import sys, zipfile; w = sys.argv[1]; n = zipfile.ZipFile(w).namelist(); assert any('.data/scripts/puffinparse' in x for x in n), w + ' has no CLI'" dist/*.whl
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -134,6 +140,9 @@ jobs:
         with:
           name: third-party-licenses
 
+      - name: Stage the CLI into the wheel
+        run: python3 scripts/stage_cli_for_wheel.py --target ${{ matrix.target }}-apple-darwin
+
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -141,8 +150,11 @@ jobs:
           args: --release --out dist
           sccache: "true"
 
-      - name: Wheel carries the licence files
-        run: python scripts/check_release_licenses.py dist/*.whl
+      - name: Wheel carries the licence files and the CLI
+        shell: bash
+        run: |
+          python scripts/check_release_licenses.py dist/*.whl
+          python -c "import sys, zipfile; w = sys.argv[1]; n = zipfile.ZipFile(w).namelist(); assert any('.data/scripts/puffinparse' in x for x in n), w + ' has no CLI'" dist/*.whl
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -167,6 +179,9 @@ jobs:
         with:
           name: third-party-licenses
 
+      - name: Stage the CLI into the wheel
+        run: python scripts/stage_cli_for_wheel.py --target x86_64-pc-windows-msvc
+
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -174,8 +189,11 @@ jobs:
           args: --release --out dist
           sccache: "true"
 
-      - name: Wheel carries the licence files
-        run: python scripts/check_release_licenses.py dist/*.whl
+      - name: Wheel carries the licence files and the CLI
+        shell: bash
+        run: |
+          python scripts/check_release_licenses.py dist/*.whl
+          python -c "import sys, zipfile; w = sys.argv[1]; n = zipfile.ZipFile(w).namelist(); assert any('.data/scripts/puffinparse' in x for x in n), w + ' has no CLI'" dist/*.whl
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -688,6 +706,11 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: auth
 
+      # The CLI embeds the benchmark site's viewer (`eval view`, ADR-28), which lives outside the
+      # crate; a published crate cannot read it there, so copy it in (hence --allow-dirty below).
+      - name: Vendor the viewer into the CLI crate
+        run: python3 scripts/vendor_viewer.py
+
       # Dependency order. puffinparse-python and puffinparse-node are `publish = false`
       # (they ship as the PyPI and npm packages).
       - name: Publish puffinparse-core, puffinparse-server, puffinparse-cli
@@ -703,7 +726,7 @@ jobs:
             if [ "$status" = "200" ]; then
               echo "$crate $version is already on crates.io, skipping"
             else
-              cargo publish --locked -p "$crate"
+              cargo publish --locked --allow-dirty -p "$crate"
             fi
           done
 

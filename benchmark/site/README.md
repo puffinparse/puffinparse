@@ -18,6 +18,15 @@ benchmark/site/
   dist/           build output (git-ignored)
 ```
 
+## The same viewer on your machine
+
+`puffinparse eval view <run>` serves this viewer for a run over your own documents (ADR-28): the CLI
+compiles `src/` in (`crates/puffinparse-cli/build.rs`) and answers the same `data/` API from the run
+folder. Such a run has no ground truth, so `index.html`'s `puffinparse-mode` meta is set to
+`review` and the views show agreement, failures, cost and a verdict form instead of scores; see the
+review-mode functions in `app.js`. A change here ships in the next CLI as well, so check both: build
+the site, and open a run with `cargo run -p puffinparse-cli -- eval view <run>`.
+
 ## Build and preview locally
 
 ```bash

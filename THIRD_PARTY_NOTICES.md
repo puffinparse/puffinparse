@@ -22,6 +22,10 @@ Docling and PaddleOCR are reached over HTTP. The Docker image's base layer
 (`gcr.io/distroless/cc-debian12`) carries its own Debian package licences (glibc, libgcc,
 CA certificates).
 
+Bundled but not a crate: the CLI embeds pdf.js 3.11.174 (Mozilla, Apache-2.0) for the local
+run viewer (`puffinparse eval view`), from `crates/puffinparse-cli/assets/pdfjs/`; its licence
+text is the first entry under Licence texts in `THIRD_PARTY_LICENSES.txt`.
+
 Benchmark data and website assets are credited separately: see the Acknowledgements section
 of [README.md](README.md) and each `benchmark/datasets/*/README.md`.
 

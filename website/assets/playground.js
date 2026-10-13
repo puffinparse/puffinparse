@@ -92,7 +92,8 @@
    * Model output is untrusted text. Everything is escaped; Markdown structure is rebuilt from
    * scratch, and the only HTML kept is a short list of tags providers really emit (emphasis,
    * sub/superscript, line breaks, tables) with every attribute dropped except a numeric
-   * colspan/rowspan. Links keep only http(s) targets; images are never loaded. */
+   * colspan/rowspan. Links keep only http(s) targets; images are never loaded. The benchmark
+   * viewer (benchmark/site/src/app.js) has a copy with `md`-prefixed names: keep the two in sync. */
 
   var INLINE_TAGS = { b: 1, strong: 1, i: 1, em: 1, u: 1, s: 1, del: 1, sup: 1, sub: 1, code: 1, br: 1, mark: 1, small: 1 };
   var TABLE_TAGS = { table: 1, thead: 1, tbody: 1, tfoot: 1, tr: 1, td: 1, th: 1, caption: 1 };
