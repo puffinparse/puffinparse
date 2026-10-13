@@ -135,6 +135,12 @@ pub fn output_path(run_dir: &Path, model: &str, doc: &str) -> PathBuf {
     run_dir.join("outputs").join(model_slug(model)).join(format!("{doc}.md"))
 }
 
+/// Where the unified response (blocks with boxes, for the viewer's layout overlay) is saved, next
+/// to the markdown, as `bench run --save-outputs` does.
+pub fn response_path(run_dir: &Path, model: &str, doc: &str) -> PathBuf {
+    run_dir.join("outputs").join(model_slug(model)).join(format!("{doc}.json"))
+}
+
 pub fn manifest_path(run_dir: &Path) -> PathBuf {
     run_dir.join("run.json")
 }
@@ -455,6 +461,8 @@ pub struct Outcome {
     pub latency_ms: u64,
     pub cost_usd: Option<f64>,
     pub provider_job_id: Option<String>,
+    /// The unified `ParseResponse`, saved for the viewer's layout overlay.
+    pub response: Option<serde_json::Value>,
 }
 
 /// A call failed in a way that must stop the whole run (a spent gateway budget).
@@ -509,12 +517,14 @@ async fn call_direct(input: CallInput) -> Result<Outcome, CallError> {
         req = req.provider_options(opts);
     }
     let r = core::parse(req).await?;
+    let response = serde_json::to_value(&r).ok();
     Ok(Outcome {
         markdown: r.markdown,
         pages: r.usage.pages,
         latency_ms: r.latency_ms,
         cost_usd: r.cost_usd,
         provider_job_id: r.provider_job_id,
+        response,
     })
 }
 
@@ -566,7 +576,7 @@ async fn call_gateway(
             job_id: err["job_id"].as_str().map(str::to_string),
         });
     }
-    let r: core::ParseResponse = serde_json::from_value(body).map_err(|e| CallError {
+    let r: core::ParseResponse = serde_json::from_value(body.clone()).map_err(|e| CallError {
         kind: "provider".into(),
         message: format!("unexpected gateway response: {e}"),
         job_id: None,
@@ -577,6 +587,7 @@ async fn call_gateway(
         latency_ms: if r.latency_ms > 0 { r.latency_ms } else { started.elapsed().as_millis() as u64 },
         cost_usd: r.cost_usd,
         provider_job_id: r.provider_job_id,
+        response: Some(body),
     })
 }
 
@@ -718,6 +729,9 @@ pub async fn execute(prep: Prepared, caller: Caller, opts: ExecOptions, progress
                                     let _ = std::fs::create_dir_all(parent);
                                 }
                                 let saved = std::fs::write(&path, &o.markdown);
+                                if let Some(json) = o.response.as_ref().and_then(|v| serde_json::to_vec(v).ok()) {
+                                    let _ = std::fs::write(response_path(&dir, &model, &doc.id), json);
+                                }
                                 CallRecord {
                                     model: model.clone(),
                                     doc: doc.id.clone(),
@@ -901,6 +915,7 @@ mod tests {
                     latency_ms: 5,
                     cost_usd: Some(0.02),
                     provider_job_id: None,
+                    response: None,
                 })
             })
         })

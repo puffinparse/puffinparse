@@ -119,10 +119,17 @@ What the server does with your data and keys:
   `provider/*` or a bare provider name). `--root <DIR>` limits local files to that directory, with
   symlinks followed. `--timeout` and `--max-retries` set the per-call limits.
 
+From the next release (0.1.7) the Python package carries the `puffinparse` command, so an agent
+can start the server with nothing installed beforehand: `uvx puffinparse mcp` downloads and caches
+it on first use, with no global install, PATH change or admin rights. Use `uvx puffinparse mcp`
+wherever the examples below say `puffinparse mcp` (with `"command": "uvx", "args": ["puffinparse",
+"mcp"]` in a JSON config). `pip install puffinparse` puts the same command on PATH.
+
 ### Claude Code
 
 ```bash
 claude mcp add puffinparse -- puffinparse mcp
+claude mcp add puffinparse -- uvx puffinparse mcp      # 0.1.7 and later, nothing to install
 claude mcp add --scope user puffinparse -- puffinparse mcp --models reducto,llamaparse
 ```
 

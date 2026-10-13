@@ -27,6 +27,14 @@ Python package `puffinparse` share a single version. Entries before the rename s
   PaddleOCR, vLLM) count as ready only when they can be reached, and a run refuses to start when
   one cannot; a scan counts PDF pages from the page tree, so files saved with incremental updates
   are not over-counted.
+- `puffinparse eval view` now serves the benchmark site's own viewer, compiled into the CLI: the same
+  model table, document list and inspector as puffinparse.com, with the page rendered by a bundled
+  pdf.js (nothing is fetched from the network), layout boxes from each model's saved response
+  (`eval run` now saves `<doc>.json` next to `<doc>.md`), a diff against another model, side-by-side
+  comparison and the verdict form. The website viewer gains a Rendered / Markdown switch for model
+  output. See ADR-28.
+- Release wheels carry the `puffinparse` CLI, so `pip install puffinparse` gives the command and
+  `uvx puffinparse mcp` starts the MCP server with nothing installed.
 - Website `/playground/`: pick a sample document (or, once a gateway is configured, upload a PDF or
   image) and compare up to three models' Markdown side by side, with latency, pages and cost.
   Samples are five redistributable documents from the newest `combined-v3` run with their committed

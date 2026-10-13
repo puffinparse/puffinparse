@@ -466,6 +466,7 @@ fn caller_for(cfg: &Config, via: &run::Via) -> run::Caller {
             }
             let r = core::parse(req).await?;
             Ok(run::Outcome {
+                response: serde_json::to_value(&r).ok(),
                 markdown: r.markdown,
                 pages: r.usage.pages,
                 latency_ms: r.latency_ms,
