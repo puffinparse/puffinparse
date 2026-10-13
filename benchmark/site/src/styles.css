@@ -1610,3 +1610,83 @@ dialog h2 {
 .gh-star:hover .gh-star-icon { color: var(--ink); }
 .gh-count { margin-left: .1rem; padding-left: .45rem; border-left: 1px solid var(--rule); color: var(--ink-2);
   font-variant-numeric: tabular-nums; }
+
+/* Rendered model output (Output and Compare tabs). The markdown is rebuilt from escaped text by
+   app.js, so only these few elements ever appear. */
+.pane.md {
+  font-family: var(--font-sans);
+  font-size: var(--t-sm);
+  line-height: var(--lh-read);
+  white-space: normal;
+}
+.pane.md > :first-child { margin-top: 0; }
+.pane.md p,
+.pane.md ul,
+.pane.md ol,
+.pane.md blockquote,
+.pane.md pre { margin: 0 0 var(--s-2); }
+.pane.md h3, .pane.md h4, .pane.md h5, .pane.md h6 { margin: var(--s-3) 0 var(--s-1); font-size: var(--t-base); line-height: var(--lh-tight); }
+.pane.md pre { white-space: pre-wrap; font-family: var(--font-mono); font-size: var(--t-xs); }
+.pane.md blockquote { padding-left: var(--s-3); border-left: 2px solid var(--rule); color: var(--ink-2); }
+.pane.md hr { border: 0; border-top: var(--hair) solid var(--rule); }
+.md-tablewrap { overflow-x: auto; margin: 0 0 var(--s-2); }
+.pane.md table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.pane.md th, .pane.md td { border: var(--hair) solid var(--rule-2, var(--rule)); padding: 2px var(--s-2); vertical-align: top; text-align: left; }
+.pane.md th { background: var(--paper-3); font-weight: var(--w-medium); }
+.md-img { color: var(--ink-3); }
+
+/* Review mode (`puffinparse eval view`): verdicts, the verdict form, the review queue. */
+.vchip {
+  display: inline-block;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pill);
+  border: var(--hair) solid currentColor;
+  font-family: var(--font-sans);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.vchip.none { color: var(--ink-3); border-style: dashed; }
+.vchip.v-good, .vbtn.v-good[aria-pressed="true"] { color: var(--good); }
+.vchip.v-fair, .vbtn.v-fair[aria-pressed="true"] { color: var(--fair); }
+.vchip.v-poor, .vbtn.v-poor[aria-pressed="true"] { color: var(--poor); }
+.review-form fieldset { border: 0; margin: 0; padding: var(--s-3) 0 0; display: grid; gap: var(--s-2); border-top: var(--hair) solid var(--rule); }
+.review-form legend { padding: 0; font-weight: var(--w-medium); font-size: var(--t-sm); }
+.verdicts { display: flex; flex-wrap: wrap; gap: var(--s-1); }
+.vbtn {
+  border: var(--hair) solid var(--rule);
+  background: var(--paper);
+  color: var(--ink-2);
+  border-radius: var(--r-pill);
+  padding: 0.2rem 0.75rem;
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.vbtn:hover { color: var(--ink); border-color: var(--ink-3); }
+.vbtn[aria-pressed="true"] { border-color: currentColor; background: var(--paper-2); font-weight: var(--w-medium); }
+.review-form textarea {
+  width: 100%;
+  min-height: 3.5rem;
+  resize: vertical;
+  padding: var(--s-2);
+  border: var(--hair) solid var(--rule);
+  border-radius: var(--r-1);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t-sm);
+}
+.review-actions { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.review-status { font-size: var(--t-xs); color: var(--ink-3); }
+.queue {
+  margin-bottom: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  border-left: 3px solid var(--scan);
+  background: var(--paper-2);
+  border-radius: var(--r-1);
+  font-size: var(--t-sm);
+}
+.queue p { margin: 0 0 var(--s-1); }
+.queue ul { margin: 0; padding-left: 1.2em; display: grid; gap: 2px; }
+.ref-pick { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--t-sm); color: var(--ink-2); }

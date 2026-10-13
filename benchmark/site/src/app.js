@@ -15,6 +15,13 @@
  *   #/<run_id>/<model_slug>/<doc_id…>?tab=rules|diff|output|truth|compare&diff=split|unified
  *                                      &ov=0|1&page=<n>&rf=fail|pass|all&src=…&cat=…&q=…
  *   #/doc/<doc_id>?run=…&model=…   (old links; redirected to the canonical form above)
+ *
+ * Review mode (ADR-28): `puffinparse eval view` serves this same file for a run over the user's
+ * own documents, with the same data API built on the fly. Such a run has no ground truth, so it
+ * carries a `review` object (agreement between models, outliers, verdicts) and the views show
+ * agreement, failures and cost instead of scores, a diff against another model, and a verdict
+ * form that posts to `api/review`. `<meta name="puffinparse-pdfjs">` points pdf.js at the copy
+ * bundled in the CLI, so a local run fetches nothing from the network.
  */
 (function () {
   "use strict";
@@ -61,6 +68,9 @@
   })();
   var HOME = meta("puffinparse-home", "");
   var DOCS = meta("puffinparse-docs", "");
+  var MODE = meta("puffinparse-mode", "");
+  var PDFJS_LOCAL = meta("puffinparse-pdfjs", "");
+  var APP_NAME = MODE === "review" ? "PuffinParse run viewer" : "PuffinParse Benchmark";
 
   var INDEX = null;
   var runCache = {};
@@ -396,13 +406,45 @@
       return srcLabel(a).localeCompare(srcLabel(b));
     });
     run.catsBySource = catsBySource;
+    if (isReview(run)) {
+      run.reviewByDoc = {};
+      (run.review.per_doc || []).forEach(function (d) {
+        run.reviewByDoc[d.id] = d;
+      });
+    }
   }
 
   function mean(b) {
     return b && b.docs ? b.sum / b.docs : null;
   }
 
+  function isReview(run) {
+    return !!(run && run.review);
+  }
+
+  /**
+   * How a review run ranks its models, best first: the share of checked documents judged correct
+   * (minor errors count half), then agreement with the other models, then successful calls.
+   */
+  function reviewRank(model) {
+    var r = model.review || {};
+    var t = r.reviews || {};
+    return [
+      t.reviewed ? (t.correct + 0.5 * t.minor_errors) / t.reviewed : -1,
+      isNum(r.agreement) ? r.agreement : -1,
+      r.ok || 0,
+    ];
+  }
+
   function byScore(models) {
+    if (models.length && "review" in models[0]) {
+      return models.slice().sort(function (a, b) {
+        var x = reviewRank(a);
+        var y = reviewRank(b);
+        for (var i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i] - x[i];
+        return 0;
+      });
+    }
     return models.slice().sort(function (a, b) {
       return (b.stats.head.value || 0) - (a.stats.head.value || 0);
     });
@@ -481,10 +523,15 @@
     view.innerHTML =
       '<div class="error"><h1>Something went wrong</h1><p>' +
       esc(err && err.message ? err.message : err) +
-      '</p><p class="caption">This page is static: it reads the JSON and markdown written by ' +
+      "</p>" +
+      (MODE === "review"
+        ? '<p class="caption">This page is served by <code>puffinparse eval view</code>. If you stopped it, start it again ' +
+          "for the run folder and open the new address it prints.</p></div>"
+        : "") +
+      (MODE === "review" ? "" : '<p class="caption">This page is static: it reads the JSON and markdown written by ' +
       "<code>benchmark/site/build.py</code>. Serve <code>dist/</code> over HTTP (for example " +
       "<code>python -m http.server -d benchmark/site/dist 8000</code>) rather than opening the " +
-      "file directly.</p></div>";
+      "file directly.</p></div>");
   }
 
   /* ------------------------------------------------------- shared fragments */
@@ -1167,9 +1214,10 @@
   }
 
   function viewLeaderboard(runInfo, params) {
-    document.title = "Leaderboard · PuffinParse Benchmark";
+    document.title = (MODE === "review" ? "Models · " : "Leaderboard · ") + APP_NAME;
     setNav("leaderboard", runInfo.run_id);
     return getRun(runInfo.run_id).then(function (run) {
+      if (isReview(run)) return reviewModels(runInfo, run, params);
       var sortKey = params.get("sort") || "score";
       var sortDir = params.get("dir") || (ASC_BY_DEFAULT.indexOf(sortKey) !== -1 ? "asc" : "desc");
       var xMode = params.get("x") === "latency" ? "latency" : "cost";
@@ -1301,11 +1349,12 @@
   }
 
   function viewDocuments(runInfo, params) {
-    document.title = "Documents · PuffinParse Benchmark";
+    document.title = "Documents · " + APP_NAME;
     setNav("documents", runInfo.run_id);
     return Promise.all([getRun(runInfo.run_id), getManifest(runInfo.dataset.name)]).then(function (loaded) {
       var run = loaded[0];
       var manifest = loaded[1];
+      if (isReview(run)) return reviewDocuments(runInfo, run, manifest, params);
       var src = params.get("src") || "";
       var cat = params.get("cat") || "";
       var perModel = params.get("pm") === "1";
@@ -2308,21 +2357,29 @@
     if (pdfLib) return pdfLib;
     pdfLib = new Promise(function (resolve, reject) {
       var script = document.createElement("script");
-      script.src = PDFJS.lib;
-      script.integrity = PDFJS.libSri;
-      script.crossOrigin = "anonymous";
-      script.referrerPolicy = "no-referrer";
+      if (PDFJS_LOCAL) {
+        // Bundled with the CLI and served from this origin: no CDN, no network.
+        script.src = url(PDFJS_LOCAL + "pdf.min.js");
+      } else {
+        script.src = PDFJS.lib;
+        script.integrity = PDFJS.libSri;
+        script.crossOrigin = "anonymous";
+        script.referrerPolicy = "no-referrer";
+      }
       script.onload = function () {
         resolve(window.pdfjsLib);
       };
       script.onerror = function () {
-        reject(new Error("pdf.js could not be loaded from cdnjs"));
+        reject(new Error(PDFJS_LOCAL ? "pdf.js could not be loaded" : "pdf.js could not be loaded from cdnjs"));
       };
       document.head.appendChild(script);
     }).then(function (lib) {
       if (!lib) throw new Error("pdf.js did not initialise");
       // Fetch the worker with the same integrity check, then run it from a blob URL.
-      return fetch(PDFJS.worker, { integrity: PDFJS.workerSri, mode: "cors", credentials: "omit" })
+      var worker = PDFJS_LOCAL
+        ? fetch(url(PDFJS_LOCAL + "pdf.worker.min.js"))
+        : fetch(PDFJS.worker, { integrity: PDFJS.workerSri, mode: "cors", credentials: "omit" });
+      return worker
         .then(function (resp) {
           if (!resp.ok) throw new Error("pdf.js worker HTTP " + resp.status);
           return resp.blob();
@@ -2773,15 +2830,19 @@
     );
   }
 
-  function modelSwitcher(models, model, byDoc, hrefFor) {
+  function modelSwitcher(models, model, byDoc, hrefFor, chipText) {
+    chipText =
+      chipText ||
+      function (m, r) {
+        return r && r.error ? "failed" : fixed(docScore(r), 1);
+      };
     var chips = models
       .map(function (m) {
         var r = byDoc[m.model];
-        var s = docScore(r);
         return (
           '<a class="chip' + (m === model ? " on" : "") + '" href="' + esc(hrefFor(m)) + '"' + (m === model ? ' aria-current="true"' : "") +
           ' title="' + esc(m.model + (r && r.error ? " — failed: " + r.error : "")) + '">' +
-          "<code>" + esc(m.model) + '</code><span class="chip-s">' + (r && r.error ? "failed" : esc(fixed(s, 1))) + "</span></a>"
+          "<code>" + esc(m.model) + '</code><span class="chip-s">' + esc(chipText(m, r)) + "</span></a>"
         );
       })
       .join("");
@@ -2790,7 +2851,7 @@
         var r = byDoc[m.model];
         return (
           '<option value="' + esc(hrefFor(m)) + '"' + (m === model ? " selected" : "") + ">" +
-          esc(m.model + " — " + (r && r.error ? "failed" : fixed(docScore(r), 1))) + "</option>"
+          esc(m.model + " — " + chipText(m, r)) + "</option>"
         );
       })
       .join("");
@@ -2827,6 +2888,8 @@
           cat: params.get("cat"),
           q: params.get("q"),
           rf: params.get("rf"),
+          fmt: params.get("fmt"),
+          ref: params.get("ref"),
         };
         Object.keys(values || {}).forEach(function (k) {
           next[k] = values[k];
@@ -2851,9 +2914,14 @@
       // Sources whose licence forbids redistribution (tag `fetch-required`, e.g. OmniDocBench) ship
       // scores only: no input, truth or model output is served, so none of them is requested.
       var restricted = (entry.tags || []).indexOf("fetch-required") !== -1;
+      var review = isReview(run);
+      var reviewDoc = review ? run.reviewByDoc[docId] || {} : null;
+      var hasTruth = !!entry.truth;
       var tabs = restricted
         ? []
-        : rulesDoc
+        : review
+          ? [["output", "Output"], ["diff", "Diff"], ["compare", "Compare models"]].concat(hasTruth ? [["truth", "Truth"]] : [])
+          : rulesDoc
           ? [["rules", "Checks"], ["output", "Output"], ["compare", "Compare models"]]
           : [["diff", "Diff"], ["output", "Output"], ["truth", "Truth"], ["compare", "Compare models"]];
       var tab = params.get("tab");
@@ -2862,6 +2930,7 @@
       var ovOn = params.get("ov") === "1";
       var page = parseInt(params.get("page") || "1", 10) || 1;
       var ruleFilter = params.get("rf") || "fail";
+      var rawOutput = params.get("fmt") === "md";
 
       var datasetBase = url("data/datasets/" + datasetName + "/");
       var truthUrl = entry.truth && !restricted ? joinPath(datasetBase, entry.truth) : null;
@@ -2873,7 +2942,7 @@
       var isPdf = /\.pdf$/i.test(entry.file || "");
       var fetchCommand = "python -m benchmark.adapters " + (docId.split("/")[0] || datasetName);
       function predUrl(m) {
-        return url("data/outputs/" + run.run_id + "/" + slugOf(m.model) + "/" + docId + ".md");
+        return url("data/outputs/" + enc(run.run_id) + "/" + enc(slugOf(m.model)) + "/" + encPath(docId) + ".md");
       }
       function hasPred(m) {
         var inv = (runInfo.outputs || {})[slugOf(m.model)];
@@ -2883,28 +2952,54 @@
         if (restricted) return Promise.resolve(null);
         return hasPred(m) ? getText(predUrl(m)).catch(function () { return null; }) : Promise.resolve(null);
       }
-      var jsonUrl = url("data/outputs/" + run.run_id + "/" + slugOf(model.model) + "/" + docId + ".json");
+      var jsonUrl = url("data/outputs/" + enc(run.run_id) + "/" + enc(slugOf(model.model)) + "/" + encPath(docId) + ".json");
       var hasJson = !restricted && inventory.json.indexOf(docId) !== -1;
 
-      var needTruth = !rulesDoc && (tab === "diff" || tab === "truth" || tab === "compare");
+      // Review runs without a transcript diff against another model: the one named by `ref`, else
+      // the model that agrees most with the others on this document.
+      var refModel = null;
+      var refChoices = [];
+      if (review && !hasTruth) {
+        refChoices = models.filter(function (m) {
+          return m !== model && hasPred(m) && !(byDoc[m.model] || {}).error;
+        });
+        refChoices.forEach(function (m) {
+          if (slugOf(m.model) === params.get("ref") || m.model === params.get("ref")) refModel = m;
+        });
+        if (!refModel) {
+          var agree = reviewDoc.agreement || {};
+          refModel = refChoices.slice().sort(function (a, b) {
+            return (agree[b.model] || 0) - (agree[a.model] || 0);
+          })[0] || null;
+        }
+      }
+
+      var needTruth = (review ? hasTruth : !rulesDoc) && (tab === "diff" || tab === "truth" || tab === "compare");
       return Promise.all([
         truthUrl && needTruth ? getText(truthUrl).catch(function () { return null; }) : Promise.resolve(null),
         tab === "compare" || !tab ? Promise.resolve(null) : loadPred(model),
         rulesUrl && !restricted ? getRules(rulesUrl) : Promise.resolve(null),
         hasJson ? getJSON(jsonUrl).catch(function () { return null; }) : Promise.resolve(null),
         tab === "compare" ? Promise.all(models.map(loadPred)) : Promise.resolve(null),
+        tab === "diff" && refModel ? loadPred(refModel) : Promise.resolve(null),
       ]).then(function (got) {
         var truth = got[0];
         var pred = got[1];
         var ruleList = got[2];
         var unified = got[3];
         var allPreds = got[4];
+        var refPred = got[5];
+        var baseLabel = "Truth";
+        if (review && !hasTruth) {
+          truth = refPred;
+          baseLabel = refModel ? refModel.model : "Reference";
+        }
         if (tab === "compare" && allPreds) pred = allPreds[models.indexOf(model)];
         var opts = run.normalize || {};
         var title = docTitle(entry);
         var srcKey = sourceOf(docId, datasetName);
         var srcName = entry.source_label || srcLabel(srcKey);
-        document.title = title + " · " + srcName + " · " + model.model + " · PuffinParse Benchmark";
+        document.title = title + (review ? "" : " · " + srcName) + " · " + model.model + " · " + APP_NAME;
 
         /* ---- the result body of the current tab */
         var body = "";
@@ -2913,10 +3008,22 @@
             body = '<p class="empty">No saved output for <code>' + esc(model.model) + "</code> on this document" +
               (rec && rec.error ? ": the call failed." : ".") + "</p>";
           } else if (truth === null) {
-            body = '<p class="empty">The ground truth could not be loaded.</p>';
+            body =
+              review && !hasTruth
+                ? '<p class="empty">No other model has an output for this document to compare with.</p>'
+                : '<p class="empty">The ground truth could not be loaded.</p>';
           } else {
             var d = wordDiff(truth, pred);
             body =
+              (review && !hasTruth
+                ? '<div class="tool-row"><label class="ref-pick">Compared with <select id="ref-select">' +
+                  refChoices
+                    .map(function (m) {
+                      return '<option value="' + esc(slugOf(m.model)) + '"' + (m === refModel ? " selected" : "") + ">" + esc(m.model) + "</option>";
+                    })
+                    .join("") +
+                  "</select></label></div>"
+                : "") +
               '<div class="tool-row"><div class="seg" role="group" aria-label="Diff layout">' +
               '<button type="button" data-diff="split" aria-pressed="' + (diffMode === "split") + '">Side by side</button>' +
               '<button type="button" data-diff="unified" aria-pressed="' + (diffMode === "unified") + '">Unified</button></div>' +
@@ -2926,11 +3033,14 @@
                 : "") +
               (diffMode === "unified"
                 ? '<div class="pane" tabindex="0" role="region" aria-label="Unified word diff">' + renderUnified(d) + "</div>"
-                : '<div class="split"><div><div class="pane-head">Truth</div>' +
-                  '<div class="pane" tabindex="0" role="region" aria-label="Truth, missing words struck through">' + renderSide(d.t, d.tMarks, "del") + "</div></div>" +
+                : '<div class="split"><div><div class="pane-head">' + esc(baseLabel) + "</div>" +
+                  '<div class="pane" tabindex="0" role="region" aria-label="' + esc(baseLabel) + ', missing words struck through">' + renderSide(d.t, d.tMarks, "del") + "</div></div>" +
                   '<div><div class="pane-head">Output</div>' +
                   '<div class="pane" tabindex="0" role="region" aria-label="Output, extra words underlined">' + renderSide(d.p, d.pMarks, "ins") + "</div></div></div>") +
-              '<p class="caption">Struck through: in the truth but missing from the output. Underlined: extra in the output. Words are compared after the scorer\'s normalisation.</p>';
+              (review && !hasTruth
+                ? '<p class="caption">Struck through: words ' + esc(baseLabel) + " has that this output lacks. Underlined: words only this output has. " +
+                  "A difference shows where to look on the page; it does not say which model is right.</p>"
+                : '<p class="caption">Struck through: in the truth but missing from the output. Underlined: extra in the output. Words are compared after the scorer\'s normalisation.</p>');
           }
         } else if (tab === "rules") {
           var scored = pred !== null && ruleList ? scoreRules(pred, ruleList, opts) : null;
@@ -2955,18 +3065,25 @@
                   var dd = wordDiff(truth, p);
                   sub = dd.del + " missing · " + dd.ins + " extra";
                   inner = renderSide(dd.p, dd.pMarks, "ins");
-                } else inner = esc(p);
+                } else inner = rawOutput ? esc(p) : renderMarkdown(p);
+                if (review && p !== null && isNum((reviewDoc.agreement || {})[m.model])) {
+                  sub = pct(reviewDoc.agreement[m.model]) + "% agreement" + ((reviewDoc.outliers || []).indexOf(m.model) !== -1 ? " · outlier" : "");
+                }
                 return (
                   '<div class="col' + (m === model ? " on" : "") + '"><div class="col-head"><a href="' + esc(canonical(m, { tab: "compare" })) + '" title="' + esc(m.model) + '">' +
-                  esc(m.model) + "</a>" + scoreHtml(docScore(r), 1) + "</div>" +
+                  esc(m.model) + "</a>" + (review ? verdictChip(reviewDoc, m.model) : scoreHtml(docScore(r), 1)) + "</div>" +
                   (sub ? '<div class="col-sub">' + esc(sub) + "</div>" : "") +
-                  (p === null ? inner : '<div class="pane" tabindex="0" role="region" aria-label="' + esc(m.model) + ' output">' + inner + "</div>") +
+                  (p === null
+                    ? inner
+                    : '<div class="pane' + (truth === null && !rulesDoc && !rawOutput ? " md" : "") + '" tabindex="0" role="region" aria-label="' + esc(m.model) + ' output">' + inner + "</div>") +
                   "</div>"
                 );
               })
               .join("") +
             "</div>" +
-            '<p class="caption">' + (rulesDoc ? "Pass counts are re-checked in your browser." : "Underlined words are not in the truth.") + "</p>";
+            (truth === null && !rulesDoc
+              ? '<div class="tool-row">' + outputFormatSwitch(rawOutput) + "</div>"
+              : '<p class="caption">' + (rulesDoc ? "Pass counts are re-checked in your browser." : "Underlined words are not in the truth.") + "</p>");
         } else if (tab === "truth") {
           body =
             truth === null
@@ -2977,8 +3094,11 @@
           body =
             pred === null
               ? '<p class="empty">No saved output' + (rec && rec.error ? ": the call failed." : ".") + "</p>"
-              : '<div><div class="pane-head"><span class="model-id">' + esc(model.model) + '</span><a href="' + esc(predUrl(model)) + '" rel="noopener">raw</a></div>' +
-                '<div class="pane" tabindex="0" role="region" aria-label="Model output">' + esc(pred) + "</div></div>";
+              : '<div class="tool-row">' + outputFormatSwitch(rawOutput) + "</div>" +
+                '<div><div class="pane-head"><span class="model-id">' + esc(model.model) + '</span><a href="' + esc(predUrl(model)) + '" rel="noopener">raw</a></div>' +
+                (rawOutput
+                  ? '<div class="pane" tabindex="0" role="region" aria-label="Model output">' + esc(pred) + "</div></div>"
+                  : '<div class="pane md" tabindex="0" role="region" aria-label="Model output, rendered">' + renderMarkdown(pred) + "</div></div>");
         } else {
           body =
             '<p class="note">This source\'s licence is research-only, so PuffinParse publishes the recorded scores but not the page, ' +
@@ -3001,7 +3121,22 @@
           served.push('<a href="' + esc(inputUrl) + '" rel="noopener">input</a>');
         }
         served.push('<a href="' + esc(url("data/runs/" + run.run_id + ".json")) + '" rel="noopener">run JSON</a>');
-        var reproduce = disclosure(
+        if (review) {
+          var localFile = joinPath(String(run.dataset.root || ".").replace(/\/?$/, "/"), docId);
+          served = [];
+          if (hasPred(model)) served.push('<a href="' + esc(predUrl(model)) + '" rel="noopener">output</a>');
+          if (hasJson) served.push('<a href="' + esc(jsonUrl) + '" rel="noopener">unified JSON</a>');
+          served.push('<a href="' + esc(inputUrl) + '" rel="noopener">input</a>');
+        }
+        var reproduce = review
+          ? disclosure(
+              "Parse it again",
+              '<p class="note">The same call from the command line:</p>' +
+                codeBlock("puffinparse parse " + JSON.stringify(localFile) + " -m " + model.model) +
+                '<p class="links">Files behind this page: ' + served.join(" · ") + "</p>",
+              { id: "doc-repro", cls: "reproduce" }
+            )
+          : disclosure(
           "Reproduce this score",
           (restricted ? '<p class="note">After fetching the data:</p>' : "") +
             '<p class="note">' + (rulesDoc ? "Parse the page with the same model, then re-run its checks:" : "Parse the page with the same model and score it locally:") + "</p>" +
@@ -3018,7 +3153,8 @@
         }
         var rulesTotal = ruleList ? ruleList.length : (rec && rec.metrics && rec.metrics.rules_total);
         var metaBits = [plural(entry.pages || 1, "page")];
-        if (rulesDoc) {
+        if (review) metaBits.push(hasTruth ? "has a reference transcript" : "no ground truth: compare models and check the page");
+        else if (rulesDoc) {
           if (isNum(rulesTotal)) metaBits.push(plural(rulesTotal, "check"));
         } else metaBits.push(rec && rec.table_only ? "scored on its table" : "scored against a transcript");
         if (entry.license) metaBits.push(entry.license);
@@ -3028,8 +3164,11 @@
         var h1 = entry.title && ordinal
           ? esc(entry.category_label || catLabel(entry.category)) + ' <span class="ord">' + esc(ordinal) + "</span>"
           : esc(title);
-        var detailRows =
-          '<dt>Document id</dt><dd><span class="idline"><code>' + esc(docId) + '</code><button type="button" class="copy-btn inline" data-copy="' + esc(docId) + '">Copy</button></span></dd>' +
+        var detailRows = review
+          ? '<dt>Document</dt><dd><span class="idline"><code>' + esc(docId) + '</code><button type="button" class="copy-btn inline" data-copy="' + esc(docId) + '">Copy</button></span></dd>' +
+            '<dt>Folder</dt><dd class="mono">' + esc(run.dataset.root || "") + "</dd>" +
+            "<dt>Run</dt><dd class=\"mono\">" + esc(run.run_id) + "</dd>"
+          : '<dt>Document id</dt><dd><span class="idline"><code>' + esc(docId) + '</code><button type="button" class="copy-btn inline" data-copy="' + esc(docId) + '">Copy</button></span></dd>' +
           "<dt>Source</dt><dd>" + esc(srcName) + " · " + esc(entry.category_label || catLabel(entry.category)) + " · dataset " + esc(datasetName) + " v" + esc(manifest.version) + "</dd>" +
           "<dt>Scored by</dt><dd>" + (rulesDoc ? "checks (machine-checkable assertions)" : rec && rec.table_only ? "table score (table rows only)" : "character similarity to the transcript") + "</dd>" +
           "<dt>Input</dt><dd class=\"mono\">" + esc(pathLabel(entry.file)) + "</dd>" +
@@ -3048,7 +3187,7 @@
 
         var html =
           '<nav class="crumbs" aria-label="Breadcrumb"><a href="' + esc(listHref("documents", run.run_id, filters)) + '">Documents</a>' +
-          '<span aria-hidden="true">›</span><a href="' + esc(listHref("documents", run.run_id, { src: srcKey })) + '">' + esc(srcName) + "</a></nav>" +
+          (review ? "" : '<span aria-hidden="true">›</span><a href="' + esc(listHref("documents", run.run_id, { src: srcKey })) + '">' + esc(srcName) + "</a>") + "</nav>" +
           '<div class="doc-head"><h1>' + h1 + "</h1>" +
           '<div class="doc-nav">' +
           (prev ? '<a class="iconbtn" href="' + esc(docLink(prev)) + '" aria-label="Previous document: ' + esc(docTitle(prev)) + ' (k)" title="' + esc(docTitle(prev)) + ' (k)">‹</a>' : '<span class="iconbtn" aria-disabled="true">‹</span>') +
@@ -3060,19 +3199,36 @@
           "</div></div>" +
           '<p class="doc-meta">' + esc(metaBits.join(" · ")) + "</p>" +
           disclosure("Details", '<dl class="kv">' + detailRows + "</dl>", { id: "doc-details", cls: "doc-details" }) +
-          modelSwitcher(models, model, byDoc, function (m) {
-            return canonical(m);
-          }) +
+          modelSwitcher(
+            models,
+            model,
+            byDoc,
+            function (m) {
+              return canonical(m);
+            },
+            review
+              ? function (m, r) {
+                  if (r && r.missing) return "not run";
+                  if (r && r.error) return "failed";
+                  var v = ((reviewDoc.reviews || {})[m.model] || {}).verdict;
+                  if (v) return VERDICT_LABELS[v] || v;
+                  var a = (reviewDoc.agreement || {})[m.model];
+                  return isNum(a) ? pct(a) + "%" : "—";
+                }
+              : null
+          ) +
           '<div class="insp">' +
           '<section class="pagecol" aria-label="Page"><div id="sv-slot"></div></section>' +
-          '<section class="summary" aria-label="Score">' +
+          (review
+            ? '<section class="summary" aria-label="Your check">' + reviewPanel(run, model, rec, reviewDoc, docId) + "</section>"
+            : '<section class="summary" aria-label="Score">' +
           '<div class="hero bbox"><div class="hero-n' + (verdictOf(score) ? " v-" + verdictOf(score) : "") + '">' + vdot(score) +
           '<span class="n">' + esc(fixed(score, 1)) + '</span><span class="of">/ 100</span></div></div>' +
           '<p class="verdict">' + esc(verdictLine(rec, rulesTotal)) + "</p>" +
           (rec && rec.error ? '<p class="failnote">' + esc(rec.error) + "</p>" : "") +
           (aside.length ? '<p class="aside">' + aside.join(" · ") + "</p>" : "") +
           disclosure("All metrics", metricsList(rec), { id: "doc-metrics" }) +
-          "</section>" +
+          "</section>") +
           '<section class="work" aria-label="Evidence">' +
           (tabs.length
             ? '<div class="tabs" role="tablist">' +
@@ -3145,6 +3301,17 @@
           });
         });
         if (tab === "rules") wireRuleBody();
+        view.querySelectorAll("button[data-fmt]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            go(canonical(model, { fmt: b.getAttribute("data-fmt") === "md" ? "md" : null }), true);
+          });
+        });
+        var refSelect = view.querySelector("#ref-select");
+        if (refSelect)
+          refSelect.addEventListener("change", function () {
+            go(canonical(model, { ref: refSelect.value }), true);
+          });
+        if (review) wireReviewForm(run, model, docId);
         function wireRuleBody() {
           view.querySelectorAll(".tab-body button[data-rf]").forEach(function (b) {
             b.addEventListener("click", function () {
@@ -3196,6 +3363,659 @@
         return "doc|" + run.run_id + "|" + docId;
       });
     });
+  }
+
+  /* ------------------------------------------------------- safe Markdown rendering
+   * Model output is untrusted text. Everything is escaped; Markdown structure is rebuilt from
+   * scratch, and the only HTML kept is a short list of tags providers really emit (emphasis,
+   * sub/superscript, line breaks, tables) with every attribute dropped except a numeric
+   * colspan/rowspan. Links keep only http(s) targets; images are never loaded. The same renderer
+   * as website/assets/playground.js: keep the two in sync. */
+
+  var MD_INLINE_TAGS = { b: 1, strong: 1, i: 1, em: 1, u: 1, s: 1, del: 1, sup: 1, sub: 1, code: 1, br: 1, mark: 1, small: 1 };
+  var MD_TABLE_TAGS = { table: 1, thead: 1, tbody: 1, tfoot: 1, tr: 1, td: 1, th: 1, caption: 1 };
+  var MD_TAG_RE = /<\/?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?\/?>/g;
+  var MD_FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+  var MD_HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+  var MD_RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
+  var MD_LIST = /^\s{0,3}([-*+]|\d{1,9}[.)])\s+(.*)$/;
+  var MD_QUOTE = /^\s{0,3}>\s?(.*)$/;
+  var MD_DELIM = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+  function mdCleanTag(raw, allowTable) {
+    var m = /^<(\/?)([a-zA-Z][a-zA-Z0-9]*)([^>]*)>$/.exec(raw);
+    if (!m) return "";
+    var name = m[2].toLowerCase();
+    if (!MD_INLINE_TAGS[name] && !(allowTable && MD_TABLE_TAGS[name])) return ""; // dropped, text kept
+    if (name === "br") return m[1] ? "" : "<br>";
+    if (m[1]) return "</" + name + ">";
+    var attrs = "";
+    if (name === "td" || name === "th") {
+      var span = /\b(colspan|rowspan)\s*=\s*["']?(\d{1,3})\b/gi;
+      var a;
+      while ((a = span.exec(m[3]))) attrs += " " + a[1].toLowerCase() + '="' + a[2] + '"';
+    }
+    return "<" + name + attrs + ">";
+  }
+
+  /** Inline Markdown on one escaped text run: code spans, links, images, bold, italic. */
+  function mdInlineText(text) {
+    var codes = [];
+    var s = esc(text).replace(/`([^`]+)`/g, function (_, c) {
+      codes.push("<code>" + c + "</code>");
+      return "\u0000" + (codes.length - 1) + "\u0000";
+    });
+    s = s.replace(/!\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g, function (_, alt) {
+      return '<span class="md-img">[image' + (alt ? ": " + alt : "") + "]</span>";
+    });
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, function (_, label, href) {
+      return /^https?:\/\//i.test(href.replace(/&amp;/g, "&"))
+        ? '<a href="' + href + '" rel="nofollow noopener noreferrer" target="_blank">' + label + "</a>"
+        : label;
+    });
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?!\w)/g, "$1<em>$2</em>");
+    s = s.replace(/(^|[^_\w])_([^_\s][^_]*?)_(?!\w)/g, "$1<em>$2</em>");
+    return s.replace(/\u0000(\d+)\u0000/g, function (_, i) {
+      return codes[+i];
+    });
+  }
+
+  /** Text with inline HTML: whitelisted tags are rebuilt, everything else is escaped text. */
+  function mdInline(text, allowTable) {
+    var out = "";
+    var last = 0;
+    var s = String(text);
+    MD_TAG_RE.lastIndex = 0;
+    var m;
+    while ((m = MD_TAG_RE.exec(s))) {
+      out += mdInlineText(s.slice(last, m.index)) + mdCleanTag(m[0], allowTable);
+      last = m.index + m[0].length;
+    }
+    return out + mdInlineText(s.slice(last));
+  }
+
+  function mdSplitRow(line) {
+    var s = line.trim().replace(/\\\|/g, "\u0001").replace(/^\|/, "").replace(/\|$/, "");
+    return s.split("|").map(function (c) {
+      return c.trim().replace(/\u0001/g, "|");
+    });
+  }
+
+  function mdStartsBlock(line, next) {
+    return (
+      MD_FENCE.test(line) || MD_HEADING.test(line) || MD_RULE.test(line) || MD_LIST.test(line) || MD_QUOTE.test(line) ||
+      /^\s*<table\b/i.test(line) || (line.indexOf("|") !== -1 && MD_DELIM.test(next || ""))
+    );
+  }
+
+  function renderMarkdown(md, depth) {
+    depth = depth || 0;
+    var lines = String(md == null ? "" : md).replace(/\r\n?/g, "\n").replace(/<!--[\s\S]*?-->/g, "").split("\n");
+    var out = [];
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      if (!line.trim()) {
+        i++;
+        continue;
+      }
+      var m;
+      if ((m = MD_FENCE.exec(line))) {
+        var fence = m[1];
+        var body = [];
+        i++;
+        while (i < lines.length && lines[i].trim().indexOf(fence) !== 0) body.push(lines[i++]);
+        i++;
+        out.push("<pre><code>" + esc(body.join("\n")) + "</code></pre>");
+        continue;
+      }
+      if (/^\s*<table\b/i.test(line)) {
+        var block = [];
+        while (i < lines.length) {
+          block.push(lines[i]);
+          if (/<\/table>/i.test(lines[i++])) break;
+        }
+        out.push('<div class="md-tablewrap">' + mdInline(block.join("\n"), true) + "</div>");
+        continue;
+      }
+      if ((m = MD_HEADING.exec(line))) {
+        var level = Math.min(m[1].length + 2, 6); // the page's own headings stop at h2
+        out.push("<h" + level + ">" + mdInline(m[2]) + "</h" + level + ">");
+        i++;
+        continue;
+      }
+      if (MD_RULE.test(line)) {
+        out.push("<hr>");
+        i++;
+        continue;
+      }
+      if (line.indexOf("|") !== -1 && MD_DELIM.test(lines[i + 1] || "")) {
+        var head = mdSplitRow(line);
+        var rows = [];
+        i += 2;
+        while (i < lines.length && lines[i].indexOf("|") !== -1 && lines[i].trim()) rows.push(mdSplitRow(lines[i++]));
+        out.push(
+          '<div class="md-tablewrap"><table><thead><tr>' +
+            head.map(function (c) { return "<th>" + mdInline(c) + "</th>"; }).join("") +
+            "</tr></thead><tbody>" +
+            rows
+              .map(function (r) {
+                return "<tr>" + r.map(function (c) { return "<td>" + mdInline(c) + "</td>"; }).join("") + "</tr>";
+              })
+              .join("") +
+            "</tbody></table></div>"
+        );
+        continue;
+      }
+      if (MD_QUOTE.test(line)) {
+        var quoted = [];
+        while (i < lines.length && (m = MD_QUOTE.exec(lines[i]))) {
+          quoted.push(m[1]);
+          i++;
+        }
+        out.push("<blockquote>" + (depth < 3 ? renderMarkdown(quoted.join("\n"), depth + 1) : esc(quoted.join(" "))) + "</blockquote>");
+        continue;
+      }
+      if ((m = MD_LIST.exec(line))) {
+        var ordered = /\d/.test(m[1]);
+        var items = [];
+        while (i < lines.length) {
+          var lm = MD_LIST.exec(lines[i]);
+          if (lm) {
+            items.push(lm[2]);
+            i++;
+            continue;
+          }
+          if (lines[i].trim() && /^\s{2,}/.test(lines[i]) && items.length) {
+            items[items.length - 1] += " " + lines[i].trim();
+            i++;
+            continue;
+          }
+          break;
+        }
+        var tag = ordered ? "ol" : "ul";
+        out.push("<" + tag + ">" + items.map(function (t) { return "<li>" + mdInline(t) + "</li>"; }).join("") + "</" + tag + ">");
+        continue;
+      }
+      var para = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() && !mdStartsBlock(lines[i], lines[i + 1])) para.push(lines[i++]);
+      out.push("<p>" + mdInline(para.join("\n")).replace(/\n/g, " ") + "</p>");
+    }
+    return out.join("\n") || '<p class="empty">Empty output.</p>';
+  }
+
+  function outputFormatSwitch(raw) {
+    return (
+      '<div class="seg" role="group" aria-label="Output format">' +
+      '<button type="button" data-fmt="rendered" aria-pressed="' + !raw + '">Rendered</button>' +
+      '<button type="button" data-fmt="md" aria-pressed="' + raw + '">Markdown</button></div>'
+    );
+  }
+
+  /* ------------------------------------------------------------- review mode */
+
+  var VERDICT_LABELS = { correct: "Correct", minor_errors: "Minor errors", major_errors: "Major errors", unusable: "Unusable" };
+  var VERDICT_TONE = { correct: "good", minor_errors: "fair", major_errors: "poor", unusable: "poor" };
+
+  function verdictChip(reviewDoc, model) {
+    var r = ((reviewDoc && reviewDoc.reviews) || {})[model];
+    if (!r) return '<span class="vchip none">unchecked</span>';
+    return (
+      '<span class="vchip v-' + esc(VERDICT_TONE[r.verdict] || "fair") + '" title="' + esc("Checked by " + r.by + (r.notes ? ": " + r.notes : "")) + '">' +
+      esc(VERDICT_LABELS[r.verdict] || r.verdict) + "</span>"
+    );
+  }
+
+  function pctOf(x) {
+    return isNum(x) ? pct(x) + "%" : "—";
+  }
+
+  function statusLabel(status) {
+    return String(status || "").replace(/_/g, " ");
+  }
+
+  /** The summary column of the inspector for a review run: agreement, the call, the verdict form. */
+  function reviewPanel(run, model, rec, reviewDoc, docId) {
+    var agree = (reviewDoc.agreement || {})[model.model];
+    var outlier = (reviewDoc.outliers || []).indexOf(model.model) !== -1;
+    var review = (reviewDoc.reviews || {})[model.model];
+    var line;
+    if (rec && rec.missing) line = "This call was not made: resume the run to finish it.";
+    else if (rec && rec.error) line = "The call failed.";
+    else if (rec && rec.empty) line = "The model returned no text.";
+    else if (isNum(agree)) line = "Shares " + pct(agree) + "% of its words with the other models" + (outlier ? ", the least on this document." : ".");
+    else line = "Only one model read this document, so there is nothing to compare it with.";
+    var aside = [];
+    if (rec && isNum(rec.latency_ms) && !rec.missing) aside.push("<span>" + esc(msFmt(rec.latency_ms)) + "</span>");
+    if (rec && isNum(rec.cost_usd)) aside.push('<span title="What this call cost">$' + esc(rec.cost_usd.toFixed(4)) + "</span>");
+    if (rec && isNum(rec.pages) && rec.pages) aside.push("<span>" + esc(plural(rec.pages, "page")) + " billed</span>");
+    var canReview = rec && !rec.missing;
+    var verdicts = run.review.verdicts || Object.keys(VERDICT_LABELS);
+    var numbers = reviewDoc.numbers_disagreement;
+    return (
+      '<div class="hero"><div class="hero-n' + (isNum(agree) ? " v-" + (agree >= 0.9 ? "good" : agree >= 0.7 ? "fair" : "poor") : "") + '">' +
+      '<span class="n">' + esc(isNum(agree) ? pct(agree) : "—") + '</span><span class="of">% agreement</span></div></div>' +
+      '<p class="verdict">' + esc(line) + "</p>" +
+      (rec && rec.error ? '<p class="failnote">' + esc(rec.error) + "</p>" : "") +
+      (aside.length ? '<p class="aside">' + aside.join(" · ") + "</p>" : "") +
+      (canReview
+        ? '<form class="review-form" id="review-form"><fieldset><legend>Your check</legend>' +
+          '<p class="caption">Compare the output with the page, then record what you found.</p>' +
+          '<div class="verdicts" role="group" aria-label="Verdict">' +
+          verdicts
+            .map(function (v) {
+              return (
+                '<button type="button" class="vbtn v-' + esc(VERDICT_TONE[v] || "fair") + '" data-verdict="' + esc(v) + '" aria-pressed="' +
+                (review && review.verdict === v) + '">' + esc(VERDICT_LABELS[v] || v) + "</button>"
+              );
+            })
+            .join("") +
+          "</div>" +
+          '<label class="sr-only" for="review-notes">Notes</label>' +
+          '<textarea id="review-notes" rows="2" maxlength="2000" placeholder="What is wrong, if anything (optional)">' + esc(review ? review.notes || "" : "") + "</textarea>" +
+          '<div class="review-actions"><button type="submit" class="btn" id="review-save"' + (review ? "" : " disabled") + ">Save</button>" +
+          '<span class="review-status" id="review-status" role="status">' +
+          (review ? esc("Checked by " + (review.by === "agent" ? "the agent" : "you") + " · " + dateFmt(review.at)) : "Not checked yet") +
+          "</span></div></fieldset></form>"
+        : "") +
+      disclosure(
+        "This document",
+        '<dl class="metrics">' +
+          [
+            ["Disagreement", pctOf(reviewDoc.disagreement), "1 − mean word agreement between the models that read it"],
+            ["On numbers", pctOf(numbers), "The same, counting only tokens with digits: amounts, dates, ids"],
+            ["Characters", rec && isNum(rec.chars) ? String(rec.chars) : "—", "Length of this model's output"],
+            ["Failed", String((reviewDoc.failed || []).length), (reviewDoc.failed || []).join(", ")],
+          ]
+            .map(function (it) {
+              return '<div title="' + esc(it[2]) + '"><dt>' + esc(it[0]) + "</dt><dd>" + esc(it[1]) + "</dd></div>";
+            })
+            .join("") +
+          "</dl>" +
+          '<p class="caption">Agreement is not accuracy: models can agree on the same mistake. It shows where to look first.</p>',
+        { id: "doc-review-numbers" }
+      )
+    );
+  }
+
+  function wireReviewForm(run, model, docId) {
+    var form = document.getElementById("review-form");
+    if (!form) return;
+    var chosen = null;
+    form.querySelectorAll("button[data-verdict]").forEach(function (b) {
+      if (b.getAttribute("aria-pressed") === "true") chosen = b.getAttribute("data-verdict");
+      b.addEventListener("click", function () {
+        chosen = b.getAttribute("data-verdict");
+        form.querySelectorAll("button[data-verdict]").forEach(function (other) {
+          other.setAttribute("aria-pressed", String(other === b));
+        });
+        document.getElementById("review-save").disabled = false;
+      });
+    });
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (!chosen) return;
+      var status = document.getElementById("review-status");
+      var save = document.getElementById("review-save");
+      save.disabled = true;
+      status.textContent = "Saving…";
+      fetch(url("api/review"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ doc: docId, model: model.model, verdict: chosen, notes: document.getElementById("review-notes").value }),
+      })
+        .then(function (resp) {
+          return resp.json().then(function (body) {
+            if (!resp.ok) throw new Error((body && body.error) || "HTTP " + resp.status);
+            return body;
+          });
+        })
+        .then(function () {
+          delete runCache[run.run_id];
+          delete jsonCache[url("data/runs/" + enc(run.run_id) + ".json")];
+          render();
+        })
+        .catch(function (err) {
+          save.disabled = false;
+          status.textContent = "Not saved: " + err.message;
+        });
+    });
+  }
+
+  /** The leaderboard of a review run: one row per model, ranked by checks then agreement. */
+  function reviewModels(runInfo, run, params) {
+    var r = run.review;
+    var ordered = byScore(run.models);
+    var monthly = isNum(r.monthly_pages) ? r.monthly_pages : null;
+    var cols = [
+      { key: "rank", label: "#", cell: function (row, position) { return { html: String(position + 1), cls: "rank" }; } },
+      {
+        key: "model",
+        label: "Model",
+        asc: true,
+        rowHeader: true,
+        cls: "sticky-col",
+        headCls: "sticky-col",
+        value: function (row) { return row.model; },
+        cell: function (row) {
+          return { html: '<a class="model-id" href="' + esc(listHref("documents", run.run_id, { pm: "1" })) + '">' + esc(row.model) + "</a>" };
+        },
+      },
+      {
+        key: "checked",
+        label: "Checked correct",
+        num: true,
+        best: "max",
+        title: "Documents judged correct, of those checked (by you in this viewer or by the agent)",
+        value: function (row) { var t = (row.review || {}).reviews || {}; return t.reviewed ? t.correct / t.reviewed : null; },
+        cell: function (row) {
+          var t = (row.review || {}).reviews || {};
+          if (!t.reviewed) return { html: "—", cls: "muted", title: "Not checked yet" };
+          return {
+            html: esc(t.correct + " / " + t.reviewed),
+            title: t.correct + " correct, " + t.minor_errors + " minor errors, " + t.major_errors + " major errors, " + t.unusable + " unusable",
+          };
+        },
+      },
+      {
+        key: "agreement",
+        label: "Agreement",
+        num: true,
+        best: "max",
+        title: "Mean share of words this model has in common with the others (it is not accuracy)",
+        value: function (row) { return (row.review || {}).agreement; },
+        cell: function (row) { return { html: esc(pctOf((row.review || {}).agreement)) }; },
+      },
+      {
+        key: "numbers",
+        label: "On numbers",
+        num: true,
+        best: "max",
+        cls: "hide-narrow",
+        headCls: "hide-narrow",
+        title: "Agreement counting only tokens with digits: amounts, dates, ids",
+        value: function (row) { return (row.review || {}).numbers_agreement; },
+        cell: function (row) { return { html: esc(pctOf((row.review || {}).numbers_agreement)) }; },
+      },
+      {
+        key: "outliers",
+        label: "Outlier on",
+        num: true,
+        asc: true,
+        best: "min",
+        cls: "hide-narrow",
+        headCls: "hide-narrow",
+        title: "Documents where this model disagreed with the others the most",
+        value: function (row) { return (row.review || {}).outlier_docs; },
+        cell: function (row) { return { html: esc(String((row.review || {}).outlier_docs || 0)) }; },
+      },
+      {
+        key: "failed",
+        label: "Failed",
+        num: true,
+        asc: true,
+        value: function (row) { var m = row.review || {}; return (m.failed || 0) + (m.empty || 0) + (m.missing || 0); },
+        cell: function (row) {
+          var m = row.review || {};
+          var n = (m.failed || 0) + (m.empty || 0) + (m.missing || 0);
+          return { html: esc(String(n)), cls: n ? "v-poor" : "muted", title: m.failed + " failed, " + m.empty + " empty, " + m.missing + " not run" };
+        },
+      },
+      {
+        key: "p50",
+        label: "p50",
+        num: true,
+        asc: true,
+        best: "min",
+        value: function (row) { return (row.review || {}).latency_p50_ms; },
+        cell: function (row) { return { html: esc(msFmt((row.review || {}).latency_p50_ms)) }; },
+      },
+      {
+        key: "cost",
+        label: "$/1k pages",
+        num: true,
+        asc: true,
+        best: "min",
+        title: "What this run cost per 1,000 pages (list price when nothing was billed yet)",
+        value: function (row) { var m = row.review || {}; return isNum(m.usd_per_1k_pages) ? m.usd_per_1k_pages : m.list_usd_per_1k_pages; },
+        cell: function (row) {
+          var m = row.review || {};
+          return { html: esc(moneyFmt(isNum(m.usd_per_1k_pages) ? m.usd_per_1k_pages : m.list_usd_per_1k_pages)) };
+        },
+      },
+    ];
+    if (monthly) {
+      cols.push({
+        key: "monthly",
+        label: "Monthly",
+        num: true,
+        asc: true,
+        best: "min",
+        title: "At " + monthly.toLocaleString("en-US") + " pages a month",
+        value: function (row) { return (row.review || {}).monthly_usd; },
+        cell: function (row) { return { html: esc(moneyFmt((row.review || {}).monthly_usd)) }; },
+      });
+    }
+    cols.push({
+      key: "evidence",
+      label: "Evidence",
+      cls: "hide-narrow muted",
+      headCls: "hide-narrow",
+      title: "What else is known about this model: the public benchmark, or a check against the live service",
+      cell: function (row) { return { html: esc(statusLabel((row.review || {}).verification)) }; },
+    });
+
+    var sortKey = params.get("sort") || null;
+    var sortDir = params.get("dir") || (sortKey && ["p50", "cost", "monthly", "failed", "outliers", "model"].indexOf(sortKey) !== -1 ? "asc" : "desc");
+    var queue = (r.review_queue || []).slice(0, 6);
+    var best = ordered[0];
+    var lede =
+      plural(run.dataset.documents, "document") + " · " + plural(run.models.length, "model") + " · " + esc(statusLabel(r.status)) +
+      " · " + esc(dateFmt(run.created_at)) + (monthly ? " · monthly cost at " + esc(monthly.toLocaleString("en-US")) + " pages" : "");
+
+    view.innerHTML =
+      '<header class="page-head"><div><h1>Models</h1><p class="lede">' + lede + '</p><p class="caption mono">' + esc(run.dataset.root || "") + "</p></div></header>" +
+      (queue.length
+        ? '<div class="queue"><p><strong>Check these first.</strong> The documents with failures or where the models disagree most, not yet checked:</p><ul>' +
+          queue
+            .map(function (id) {
+              return '<li><a href="' + esc(docHref(run.run_id, best.model, id, {})) + '">' + esc(id) + "</a></li>";
+            })
+            .join("") +
+          "</ul></div>"
+        : "") +
+      '<div class="table-tools"><p class="caption">Ranked by the documents checked correct, then by agreement. Agreement shows where models read the same words; it is not accuracy.</p></div>' +
+      sortableTable({ id: "leaderboard", cls: "lb-table", columns: cols, rows: ordered, sortKey: sortKey, sortDir: sortDir, caption: "Models in this run" }) +
+      '<div class="bottom-disclosures">' +
+      ((r.notes || []).length
+        ? disclosure("Notes <span class=\"count\">" + r.notes.length + "</span>", '<ul class="prose">' + r.notes.map(function (n) { return "<li>" + esc(n) + "</li>"; }).join("") + "</ul>", { id: "rv-notes", open: true })
+        : "") +
+      disclosure(
+        "Next steps",
+        '<p class="note">Write the report next to the run, or finish calls that failed or were never made:</p>' +
+          codeBlock("puffinparse eval analyze " + JSON.stringify(r.run_dir || "") + " --write-report") +
+          codeBlock("puffinparse eval run --resume " + JSON.stringify(r.run_dir || "")),
+        { id: "rv-next" }
+      ) +
+      disclosure(
+        "Run details",
+        '<dl class="kv"><dt>Run</dt><dd class="mono">' + esc(run.run_id) + "</dd>" +
+          "<dt>Folder</dt><dd class=\"mono\">" + esc(run.dataset.root || "") + "</dd>" +
+          "<dt>Started</dt><dd>" + esc(run.created_at) + "</dd>" +
+          "<dt>Status</dt><dd>" + esc(statusLabel(r.status)) + "</dd>" +
+          "<dt>Paid with</dt><dd>" + esc(r.via === "gateway" ? "a PuffinParse gateway key" : "your provider keys") + "</dd>" +
+          (r.pages_selection ? "<dt>Pages</dt><dd>" + esc(r.pages_selection) + "</dd>" : "") +
+          (isNum(r.max_cost_usd) ? "<dt>Spending cap</dt><dd>" + esc(moneyFmt(r.max_cost_usd)) + "</dd>" : "") +
+          "<dt>Version</dt><dd>PuffinParse " + esc(run.puffinparse_version) + "</dd></dl>",
+        { id: "rv-run" }
+      ) +
+      "</div>";
+    wireSorting(view, function (key, dir) {
+      return listHref("leaderboard", run.run_id, { sort: key, dir: dir });
+    });
+    wireCopyButtons(view);
+    wireDisclosures(view);
+    KEYS = {};
+    return "leaderboard|" + run.run_id;
+  }
+
+  /** The documents of a review run, most disagreement first. */
+  function reviewDocuments(runInfo, run, manifest, params) {
+    var models = byScore(run.models);
+    var byDoc = recordsByDoc(run);
+    var perModel = params.get("pm") === "1";
+    var filters = { q: params.get("q") };
+    var rows = docList(run, manifest, params).map(function (doc) {
+      var rd = run.reviewByDoc[doc.id] || {};
+      var reviews = rd.reviews || {};
+      var worst = null;
+      var order = ["correct", "minor_errors", "major_errors", "unusable"];
+      Object.keys(reviews).forEach(function (m) {
+        if (worst === null || order.indexOf(reviews[m].verdict) > order.indexOf(worst)) worst = reviews[m].verdict;
+      });
+      return { doc: doc, rd: rd, checked: Object.keys(reviews).length, worst: worst };
+    });
+    function openModel(row) {
+      var agree = row.rd.agreement || {};
+      var outlier = (row.rd.outliers || [])[0];
+      if (outlier) return outlier;
+      var best = models.slice().sort(function (a, b) { return (agree[b.model] || 0) - (agree[a.model] || 0); })[0];
+      return best ? best.model : models[0].model;
+    }
+    var columns = [
+      {
+        key: "id",
+        label: "Document",
+        asc: true,
+        rowHeader: true,
+        cls: "doc-cell" + (perModel ? " sticky-col" : ""),
+        headCls: perModel ? "sticky-col" : "",
+        value: function (row) { return row.doc.id; },
+        cell: function (row) {
+          return { html: '<a href="' + esc(docHref(run.run_id, openModel(row), row.doc.id, filters)) + '">' + esc(row.doc.id) + "</a>", title: row.doc.id };
+        },
+      },
+      {
+        key: "dis",
+        label: "Disagreement",
+        num: true,
+        title: "1 − mean word agreement between the models that read the document; high means look here first",
+        value: function (row) { return row.rd.disagreement; },
+        cell: function (row) {
+          var d = row.rd.disagreement;
+          return { html: esc(pctOf(d)), cls: isNum(d) ? (d > 0.3 ? "v-poor" : d > 0.1 ? "v-fair" : "") : "muted" };
+        },
+      },
+      {
+        key: "num",
+        label: "On numbers",
+        num: true,
+        cls: "hide-narrow",
+        headCls: "hide-narrow",
+        value: function (row) { return row.rd.numbers_disagreement; },
+        cell: function (row) { return { html: esc(pctOf(row.rd.numbers_disagreement)) }; },
+      },
+      {
+        key: "failed",
+        label: "Failed",
+        num: true,
+        value: function (row) { return (row.rd.failed || []).length + (row.rd.empty || []).length; },
+        cell: function (row) {
+          var names = (row.rd.failed || []).concat(row.rd.empty || []);
+          return { html: esc(String(names.length)), cls: names.length ? "v-poor" : "muted", title: names.join(", ") };
+        },
+      },
+    ];
+    if (!perModel) {
+      columns.push(
+        {
+          key: "outliers",
+          label: "Outlier",
+          cls: "hide-narrow",
+          headCls: "hide-narrow",
+          cell: function (row) {
+            var o = row.rd.outliers || [];
+            return { html: o.length ? o.map(function (m) { return '<code class="model-id">' + esc(m) + "</code>"; }).join(" ") : '<span class="muted">—</span>' };
+          },
+        },
+        {
+          key: "checked",
+          label: "Checked",
+          num: true,
+          asc: true,
+          value: function (row) { return row.checked; },
+          cell: function (row) {
+            if (!row.checked) return { html: "—", cls: "muted" };
+            return { html: esc(row.checked + " / " + models.length) + " " + (row.worst ? '<span class="vchip v-' + VERDICT_TONE[row.worst] + '">' + esc(VERDICT_LABELS[row.worst]) + "</span>" : "") };
+          },
+        }
+      );
+    } else {
+      models.forEach(function (model) {
+        var parts = modelParts(model.model);
+        columns.push({
+          key: "m:" + model.model,
+          label: model.model,
+          labelHtml: '<span class="mhead"><span class="p">' + esc(parts.p) + '</span><span class="v">' + esc(parts.v) + "</span></span>",
+          num: true,
+          title: "Agreement of " + model.model + " with the other models, or your verdict once checked",
+          value: function (row) { var a = (row.rd.agreement || {})[model.model]; return isNum(a) ? a : null; },
+          cell: function (row) {
+            var rec = byDoc[row.doc.id] && byDoc[row.doc.id][model.model];
+            var href = esc(docHref(run.run_id, model.model, row.doc.id, filters));
+            if (rec && rec.missing) return { html: "not run", cls: "muted" };
+            if (rec && rec.error) return { html: '<a href="' + href + '">failed</a>', cls: "low", title: rec.error };
+            var v = ((row.rd.reviews || {})[model.model] || {}).verdict;
+            if (v) return { html: '<a href="' + href + '" class="vchip v-' + VERDICT_TONE[v] + '">' + esc(VERDICT_LABELS[v]) + "</a>" };
+            var a = (row.rd.agreement || {})[model.model];
+            return { html: '<a href="' + href + '">' + esc(pctOf(a)) + "</a>", cls: "pm-cell" };
+          },
+        });
+      });
+    }
+    var sortKey = params.get("sort") || "dis";
+    var sortDir = params.get("dir") || (sortKey === "id" || sortKey === "checked" ? "asc" : "desc");
+    var total = manifest.documents.length;
+    view.innerHTML =
+      '<header class="page-head"><div><h1>Documents</h1><p class="lede">' +
+      (rows.length === total ? plural(total, "document") : rows.length + " of " + plural(total, "document")) +
+      " · most disagreement first: open one to see the page next to each model's output and record what you find</p></div></header>" +
+      '<div class="filters" role="search">' +
+      '<label class="grow"><span class="sr-only">Filter</span><input id="doc-search" type="search" placeholder="Filter" value="' + esc(params.get("q") || "") + '" /></label>' +
+      '<span class="spacer"></span>' +
+      '<button type="button" class="toggle" id="per-model" aria-pressed="' + perModel + '">Per model</button>' +
+      "</div>" +
+      sortableTable({ cls: "docs-table", columns: columns, rows: rows, sortKey: sortKey, sortDir: sortDir, caption: "Documents with how much the models disagree" });
+    function refilter(values) {
+      var next = { q: params.get("q"), sort: params.get("sort"), dir: params.get("dir"), pm: params.get("pm") };
+      Object.keys(values).forEach(function (k) {
+        next[k] = values[k];
+      });
+      go(listHref("documents", run.run_id, next), true);
+    }
+    wireSorting(view, function (key, dir) {
+      return listHref("documents", run.run_id, { q: params.get("q"), sort: key, dir: dir, pm: params.get("pm") });
+    });
+    view.querySelector("#per-model").addEventListener("click", function () {
+      refilter({ pm: perModel ? null : "1" });
+    });
+    var search = view.querySelector("#doc-search");
+    var timer = null;
+    search.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        refilter({ q: search.value });
+        var again = document.getElementById("doc-search");
+        if (again) {
+          again.focus();
+          again.setSelectionRange(again.value.length, again.value.length);
+        }
+      }, 220);
+    });
+    KEYS = {};
+    return "documents|" + run.run_id;
   }
 
   /* ------------------------------------------------------------------ boot */
@@ -3297,6 +4117,16 @@
       });
     else if (helpBtn) helpBtn.hidden = true;
     if (HOME) document.getElementById("brand").setAttribute("href", HOME);
+    if (MODE === "review") {
+      var sub = document.querySelector(".brand-sub");
+      if (sub) sub.textContent = "run viewer";
+      var lb = document.getElementById("nav-leaderboard");
+      if (lb) lb.textContent = "Models";
+      var footer = document.querySelector(".site-footer .wrap");
+      if (footer)
+        footer.innerHTML =
+          "Served on this computer by <code>puffinparse eval view</code>. Your documents and outputs never leave it.";
+    }
     var docs = document.getElementById("nav-docs");
     if (DOCS && docs) {
       docs.setAttribute("href", DOCS);

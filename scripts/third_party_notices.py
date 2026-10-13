@@ -101,6 +101,10 @@ def render_summary(pkgs: list[dict[str, Any]]) -> str:
         "(`gcr.io/distroless/cc-debian12`) carries its own Debian package licences (glibc, libgcc,",
         "CA certificates).",
         "",
+        "Bundled but not a crate: the CLI embeds pdf.js 3.11.174 (Mozilla, Apache-2.0) for the local",
+        "run viewer (`puffinparse eval view`), from `crates/puffinparse-cli/assets/pdfjs/`; its licence",
+        "text is the first entry under Licence texts in `THIRD_PARTY_LICENSES.txt`.",
+        "",
         "Benchmark data and website assets are credited separately: see the Acknowledgements section",
         "of [README.md](README.md) and each `benchmark/datasets/*/README.md`.",
         "",
@@ -170,6 +174,9 @@ def coverage_problems(pkgs: list[dict[str, Any]]) -> list[str]:
 
 def render_full(pkgs: list[dict[str, Any]]) -> str:
     parts = [render_summary(pkgs), "", "=" * 100, "Licence texts", "=" * 100]
+    pdfjs = ROOT / "crates/puffinparse-cli/assets/pdfjs/LICENSE"
+    parts += ["", "-" * 100, "pdf.js 3.11.174  (Apache-2.0), Copyright 2023 Mozilla Foundation", "-" * 100]
+    parts += [f"--- {pdfjs.name}", pdfjs.read_text(encoding="utf-8").rstrip()]
     for p in pkgs:
         title = f"{p['name']} {p['version']}  ({p.get('license') or 'see files'})"
         parts += ["", "-" * 100, title, "-" * 100]

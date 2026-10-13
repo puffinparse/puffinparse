@@ -494,6 +494,7 @@ stdio, so an agent can parse, OCR, extract and compare models on a document dire
 
 ```bash
 claude mcp add puffinparse -- puffinparse mcp                     # Claude Code
+claude mcp add puffinparse -- uvx puffinparse mcp                 # same, nothing to install (0.1.7+)
 puffinparse mcp --models reducto,llamaparse --root ~/docs         # optional allow-list and file root
 ```
 
@@ -514,7 +515,7 @@ puffinparse eval scan ~/docs
 puffinparse eval recommend --monthly-pages 20000 --needs tables,scans --zdr
 puffinparse eval run ~/docs -m reducto,llamaparse/cost_effective,tesseract --max-cost 5
 puffinparse eval analyze ~/docs/.puffinparse/runs/<run> --write-report
-puffinparse eval view ~/docs/.puffinparse/runs/<run>             # local side-by-side viewer
+puffinparse eval view ~/docs/.puffinparse/runs/<run>             # the benchmark viewer, on your run
 puffinparse eval anonymize ~/docs --out ~/docs-redacted          # optional, redacts locally first
 ```
 
