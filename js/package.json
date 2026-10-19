@@ -46,7 +46,7 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.1.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.4",
     "typescript": "^5.6.0"
   },
   "publishConfig": {
