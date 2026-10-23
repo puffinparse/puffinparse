@@ -5,6 +5,9 @@ target/
 **/__pycache__/
 benchmark/
 website/
+# ...except the run viewer, which the CLI compiles in (crates/puffinparse-cli/build.rs, ADR-28).
+!benchmark/site/src/
+!website/assets/tokens.css
 docs/
 python/
 node_modules/
