@@ -33,6 +33,12 @@ Python package `puffinparse` share a single version. Entries before the rename s
   (`eval run` now saves `<doc>.json` next to `<doc>.md`), a diff against another model, side-by-side
   comparison and the verdict form. The website viewer gains a Rendered / Markdown switch for model
   output. See ADR-28.
+- The results viewer (website and `eval view`) is one review screen on wide displays: page and
+  output side by side with a draggable divider, page zoom, and a **Blocks** tab whose cards are
+  linked both ways to their boxes on the page. Hold `o` to peek at the boxes. In a local run, the
+  verdict bar stays under the output: `v` then `1`–`4` saves a verdict at once, `n` opens the next
+  unchecked output, a progress bar counts what is checked, and saving can move on automatically.
+  Diffs no longer show inline HTML tags as words.
 - Release wheels carry the `puffinparse` CLI, so `pip install puffinparse` gives the command and
   `uvx puffinparse mcp` starts the MCP server with nothing installed.
 - Website `/playground/`: pick a sample document (or, once a gateway is configured, upload a PDF or

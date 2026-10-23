@@ -2450,7 +2450,10 @@
       '<span class="pager-label"></span>' +
       '<button type="button" class="iconbtn" data-page="1" aria-label="Next page (])">›</button></div>' +
       '<span class="spacer"></span>' +
-      '<button type="button" class="toggle ov-toggle" aria-pressed="false" hidden title="Layout boxes from the unified response (o)">Layout boxes</button>' +
+      '<div class="zoom" role="group" aria-label="Zoom"><button type="button" class="iconbtn" data-zoom="-1" aria-label="Zoom out">−</button>' +
+      '<button type="button" class="zoom-label" data-zoom="0" title="Fit to width">100%</button>' +
+      '<button type="button" class="iconbtn" data-zoom="1" aria-label="Zoom in">+</button></div>' +
+      '<button type="button" class="toggle ov-toggle" aria-pressed="false" hidden title="Layout boxes from the unified response (o; hold to peek)">Layout boxes</button>' +
       (opts.restricted ? "" : '<a class="sv-open" href="' + esc(opts.inputUrl) + '" rel="noopener" target="_blank">Open original</a>') +
       "</div>" +
       '<div class="sv-page"><div class="sv-media"></div>' +
@@ -2469,6 +2472,22 @@
     self.toggle.addEventListener("click", function () {
       self.onOverlay(!self.overlayOn);
     });
+    self.zoom = 1;
+    self.pageEl = self.el.querySelector(".sv-page");
+    self.el.querySelectorAll("[data-zoom]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var step = Number(b.getAttribute("data-zoom"));
+        self.setZoom(step === 0 ? 1 : self.zoom + step * 0.25);
+      });
+    });
+    // A click on a box selects its block (the inspector shows it in the Blocks tab).
+    self.svg.addEventListener("click", function (e) {
+      var r = e.target.closest && e.target.closest("rect[data-i]");
+      if (r && self.onBoxClick) self.onBoxClick(self.page, Number(r.getAttribute("data-i")));
+    });
+    self.linked = false;
+    self.peek = false;
+    self.active = null;
     // Hooks the inspector replaces so page / overlay changes land in the URL.
     self.onPage = function (n) {
       self.showPage(n);
@@ -2546,7 +2565,7 @@
         return pdf.getPage(Math.max(1, Math.min(self.page, pdf.numPages))).then(function (page) {
           if (token !== self.token) return null;
           var base = page.getViewport({ scale: 1 });
-          var cssWidth = Math.max(320, Math.min(self.el.clientWidth || 640, 1100));
+          var cssWidth = Math.max(320, Math.min(self.pageEl.clientWidth || self.el.clientWidth || 640, 2400));
           var ratio = Math.min(window.devicePixelRatio || 1, 2);
           var viewport = page.getViewport({ scale: (cssWidth / base.width) * ratio });
           var canvas = document.createElement("canvas");
@@ -2601,9 +2620,35 @@
     this.drawOverlay();
   };
 
+  /** Boxes shown while a key is held, without changing the toggle. */
+  SourceViewer.prototype.setPeek = function (on) {
+    this.peek = !!on;
+    this.drawOverlay();
+  };
+
+  SourceViewer.prototype.setZoom = function (z) {
+    this.zoom = Math.max(0.5, Math.min(3, Math.round(z * 4) / 4));
+    this.pageEl.style.width = this.zoom === 1 ? "" : this.zoom * 100 + "%";
+    this.el.querySelector(".zoom-label").textContent = Math.round(this.zoom * 100) + "%";
+    if (this.canvasShown && !this.imageFor(this.page)) this.load();
+  };
+
+  /** Emphasise one block's box (the others stay faint) and scroll it into view. */
+  SourceViewer.prototype.setActive = function (page, i) {
+    this.active = { page: page, i: i };
+    if (page !== this.page) {
+      this.showPage(page);
+      return;
+    }
+    this.drawOverlay();
+    var rect = this.svg.querySelector('rect[data-i="' + i + '"]');
+    if (rect && rect.scrollIntoView) rect.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+  };
+
   SourceViewer.prototype.drawOverlay = function () {
     var available = !!this.overlay;
-    var active = available && this.overlayOn && this.ready;
+    var active = available && (this.overlayOn || this.linked || this.peek) && this.ready;
+    var current = this.active && this.active.page === this.page ? this.active.i : -1;
     this.toggle.setAttribute("aria-pressed", String(available && this.overlayOn));
     var blocks = active ? this.overlay.pages[this.page] || [] : [];
     var used = {};
@@ -2618,7 +2663,7 @@
         var h = Math.abs(b.y1 - b.y0) * 1000;
         var text = String(block.text || block.content || "").replace(/\s+/g, " ").slice(0, 160);
         return (
-          '<rect class="bt-' + g.key + '" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + w.toFixed(1) +
+          '<rect class="bt-' + g.key + (i === current ? " on" : "") + '" data-i="' + i + '" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + w.toFixed(1) +
           '" height="' + h.toFixed(1) + '" vector-effect="non-scaling-stroke"><title>' +
           esc("#" + (i + 1) + " " + (block.type || "?") + (isNum(block.confidence) ? " (" + block.confidence.toFixed(2) + ")" : "") + " — " + text) +
           "</title></rect>"
@@ -2626,6 +2671,7 @@
       })
       .join("");
     this.svg.style.display = active ? "" : "none";
+    this.svg.classList.toggle("linked", this.linked || current !== -1);
     var keys = BLOCK_GROUPS.filter(function (g) {
       return used[g.key];
     });
@@ -2917,13 +2963,15 @@
       var review = isReview(run);
       var reviewDoc = review ? run.reviewByDoc[docId] || {} : null;
       var hasTruth = !!entry.truth;
+      // Blocks: the unified response's blocks, each linked to its box on the page (both ways).
+      var blocksTab = !restricted && inventory.json.indexOf(docId) !== -1 ? [["blocks", "Blocks"]] : [];
       var tabs = restricted
         ? []
         : review
-          ? [["output", "Output"], ["diff", "Diff"], ["compare", "Compare models"]].concat(hasTruth ? [["truth", "Truth"]] : [])
+          ? blocksTab.concat([["output", "Output"], ["diff", "Diff"], ["compare", "Compare models"]], hasTruth ? [["truth", "Truth"]] : [])
           : rulesDoc
-          ? [["rules", "Checks"], ["output", "Output"], ["compare", "Compare models"]]
-          : [["diff", "Diff"], ["output", "Output"], ["truth", "Truth"], ["compare", "Compare models"]];
+          ? [["rules", "Checks"], ["output", "Output"]].concat(blocksTab, [["compare", "Compare models"]])
+          : [["diff", "Diff"], ["output", "Output"]].concat(blocksTab, [["truth", "Truth"], ["compare", "Compare models"]]);
       var tab = params.get("tab");
       if (!tabs.some(function (t) { return t[0] === tab; })) tab = tabs.length ? tabs[0][0] : null;
       var diffMode = params.get("diff") === "unified" ? "unified" : "split";
@@ -3013,7 +3061,7 @@
                 ? '<p class="empty">No other model has an output for this document to compare with.</p>'
                 : '<p class="empty">The ground truth could not be loaded.</p>';
           } else {
-            var d = wordDiff(truth, pred);
+            var d = wordDiff(stripHtmlTags(truth), stripHtmlTags(pred));
             body =
               (review && !hasTruth
                 ? '<div class="tool-row"><label class="ref-pick">Compared with <select id="ref-select">' +
@@ -3090,6 +3138,8 @@
               ? '<p class="empty">The ground truth could not be loaded.</p>'
               : '<div><div class="pane-head"><span>Markdown source the metrics compare against</span><a href="' + esc(truthUrl) + '" rel="noopener">raw</a></div>' +
                 '<div class="pane" tabindex="0" role="region" aria-label="Ground truth markdown">' + esc(truth) + "</div></div>";
+        } else if (tab === "blocks") {
+          body = blocksBody(unified ? blocksByPage(unified) : null, model);
         } else if (tab === "output") {
           body =
             pred === null
@@ -3198,6 +3248,7 @@
           '<path d="M6.5 9.5l3-3M7 4.5l1.2-1.2a2.6 2.6 0 0 1 3.7 3.7L10.7 8.2M9 11.5l-1.2 1.2a2.6 2.6 0 0 1-3.7-3.7L5.3 7.8"/></svg></button>' +
           "</div></div>" +
           '<p class="doc-meta">' + esc(metaBits.join(" · ")) + "</p>" +
+          (review ? reviewProgress(run, manifest, params) : "") +
           disclosure("Details", '<dl class="kv">' + detailRows + "</dl>", { id: "doc-details", cls: "doc-details" }) +
           modelSwitcher(
             models,
@@ -3217,10 +3268,12 @@
                 }
               : null
           ) +
-          '<div class="insp">' +
+          '<div class="insp rv" id="rv">' +
           '<section class="pagecol" aria-label="Page"><div id="sv-slot"></div></section>' +
+          '<div class="rv-split" role="separator" aria-orientation="vertical" aria-label="Resize the page and the output" tabindex="0" title="Drag to resize (← →)"></div>' +
+          '<section class="work" aria-label="Evidence"><div class="rv-scroll" id="rv-scroll">' +
           (review
-            ? '<section class="summary" aria-label="Your check">' + reviewPanel(run, model, rec, reviewDoc, docId) + "</section>"
+            ? '<section class="summary" aria-label="This output">' + reviewSummary(run, model, rec, reviewDoc) + "</section>"
             : '<section class="summary" aria-label="Score">' +
           '<div class="hero bbox"><div class="hero-n' + (verdictOf(score) ? " v-" + verdictOf(score) : "") + '">' + vdot(score) +
           '<span class="n">' + esc(fixed(score, 1)) + '</span><span class="of">/ 100</span></div></div>' +
@@ -3229,7 +3282,6 @@
           (aside.length ? '<p class="aside">' + aside.join(" · ") + "</p>" : "") +
           disclosure("All metrics", metricsList(rec), { id: "doc-metrics" }) +
           "</section>") +
-          '<section class="work" aria-label="Evidence">' +
           (tabs.length
             ? '<div class="tabs" role="tablist">' +
               tabs
@@ -3241,6 +3293,8 @@
             : "") +
           '<div class="tab-body" role="' + (tabs.length ? "tabpanel" : "region") + '">' + body + "</div>" +
           reproduce +
+          "</div>" +
+          (review ? verdictBar(run, model, rec, reviewDoc) : "") +
           "</section></div>";
 
         view.innerHTML = html;
@@ -3272,9 +3326,44 @@
           go(canonical(model, { ov: on ? "1" : null }), true);
         };
         SV.overlayOn = ovOn;
+        SV.linked = tab === "blocks";
+        SV.active = null;
         if (page !== SV.page) SV.showPage(page);
         var overlay = unified ? blocksByPage(unified) : null;
         SV.setOverlay(overlay, overlay && overlay.count ? plural(overlay.count, "layout box", "layout boxes") + " from the unified response of " + model.model : "");
+        SV.onBoxClick = function (pg, i) {
+          if (tab !== "blocks") {
+            go(canonical(model, { tab: "blocks", b: pg + "." + i }), true);
+            return;
+          }
+          activateBlock(pg, i, false);
+        };
+        function activateBlock(pg, i, fromCard) {
+          view.querySelectorAll(".blk.on").forEach(function (c) {
+            c.classList.remove("on");
+          });
+          var card = document.getElementById("blk-" + pg + "-" + i);
+          if (card) {
+            card.classList.add("on");
+            if (!fromCard) card.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+          }
+          SV.setActive(pg, i);
+        }
+        if (tab === "blocks") {
+          view.querySelectorAll(".blk").forEach(function (card) {
+            var pg = Number(card.getAttribute("data-p"));
+            var i = Number(card.getAttribute("data-i"));
+            var on = function () {
+              activateBlock(pg, i, true);
+            };
+            card.addEventListener("mouseenter", on);
+            card.addEventListener("focus", on);
+          });
+          var wanted = /^(\d+)\.(\d+)$/.exec(params.get("b") || "");
+          if (wanted) activateBlock(Number(wanted[1]), Number(wanted[2]), false);
+        }
+        wireSplit(view.querySelector("#rv"));
+        fitWorkspace();
 
         /* ---- wiring */
         wireCopyButtons(view);
@@ -3311,7 +3400,7 @@
           refSelect.addEventListener("change", function () {
             go(canonical(model, { ref: refSelect.value }), true);
           });
-        if (review) wireReviewForm(run, model, docId);
+        if (review) wireVerdictBar(run, manifest, model, docId, rec);
         function wireRuleBody() {
           view.querySelectorAll(".tab-body button[data-rf]").forEach(function (b) {
             b.addEventListener("click", function () {
@@ -3347,6 +3436,13 @@
           },
           o: function () {
             if (SV.overlay) SV.onOverlay(!SV.overlayOn);
+          },
+          n: function () {
+            if (review) goNextUnreviewed(run, manifest, docId, model.model, true);
+          },
+          e: function () {
+            var notes = document.getElementById("review-notes");
+            if (notes) notes.focus();
           },
           "[": function () {
             SV.onPage(SV.page - 1);
@@ -3576,11 +3672,10 @@
     return String(status || "").replace(/_/g, " ");
   }
 
-  /** The summary column of the inspector for a review run: agreement, the call, the verdict form. */
-  function reviewPanel(run, model, rec, reviewDoc, docId) {
+  /** The top of the output column for a review run: agreement and what the call returned. */
+  function reviewSummary(run, model, rec, reviewDoc) {
     var agree = (reviewDoc.agreement || {})[model.model];
     var outlier = (reviewDoc.outliers || []).indexOf(model.model) !== -1;
-    var review = (reviewDoc.reviews || {})[model.model];
     var line;
     if (rec && rec.missing) line = "This call was not made: resume the run to finish it.";
     else if (rec && rec.error) line = "The call failed.";
@@ -3591,42 +3686,23 @@
     if (rec && isNum(rec.latency_ms) && !rec.missing) aside.push("<span>" + esc(msFmt(rec.latency_ms)) + "</span>");
     if (rec && isNum(rec.cost_usd)) aside.push('<span title="What this call cost">$' + esc(rec.cost_usd.toFixed(4)) + "</span>");
     if (rec && isNum(rec.pages) && rec.pages) aside.push("<span>" + esc(plural(rec.pages, "page")) + " billed</span>");
-    var canReview = rec && !rec.missing;
-    var verdicts = run.review.verdicts || Object.keys(VERDICT_LABELS);
-    var numbers = reviewDoc.numbers_disagreement;
+    var measured = function (x) {
+      return isNum(x) ? pct(x) + "%" : "not measured";
+    };
     return (
-      '<div class="hero"><div class="hero-n' + (isNum(agree) ? " v-" + (agree >= 0.9 ? "good" : agree >= 0.7 ? "fair" : "poor") : "") + '">' +
-      '<span class="n">' + esc(isNum(agree) ? pct(agree) : "—") + '</span><span class="of">% agreement</span></div></div>' +
-      '<p class="verdict">' + esc(line) + "</p>" +
-      (rec && rec.error ? '<p class="failnote">' + esc(rec.error) + "</p>" : "") +
+      '<div class="rv-sum"><div class="hero-n' + (isNum(agree) ? " v-" + (agree >= 0.9 ? "good" : agree >= 0.7 ? "fair" : "poor") : "") + '">' +
+      '<span class="n">' + esc(isNum(agree) ? pct(agree) : "—") + '</span><span class="of">% agreement</span></div>' +
+      '<div class="rv-sum-text"><p class="verdict">' + esc(line) + "</p>" +
       (aside.length ? '<p class="aside">' + aside.join(" · ") + "</p>" : "") +
-      (canReview
-        ? '<form class="review-form" id="review-form"><fieldset><legend>Your check</legend>' +
-          '<p class="caption">Compare the output with the page, then record what you found.</p>' +
-          '<div class="verdicts" role="group" aria-label="Verdict">' +
-          verdicts
-            .map(function (v) {
-              return (
-                '<button type="button" class="vbtn v-' + esc(VERDICT_TONE[v] || "fair") + '" data-verdict="' + esc(v) + '" aria-pressed="' +
-                (review && review.verdict === v) + '">' + esc(VERDICT_LABELS[v] || v) + "</button>"
-              );
-            })
-            .join("") +
-          "</div>" +
-          '<label class="sr-only" for="review-notes">Notes</label>' +
-          '<textarea id="review-notes" rows="2" maxlength="2000" placeholder="What is wrong, if anything (optional)">' + esc(review ? review.notes || "" : "") + "</textarea>" +
-          '<div class="review-actions"><button type="submit" class="btn" id="review-save"' + (review ? "" : " disabled") + ">Save</button>" +
-          '<span class="review-status" id="review-status" role="status">' +
-          (review ? esc("Checked by " + (review.by === "agent" ? "the agent" : "you") + " · " + dateFmt(review.at)) : "Not checked yet") +
-          "</span></div></fieldset></form>"
-        : "") +
+      "</div></div>" +
+      (rec && rec.error ? '<p class="failnote">' + esc(rec.error) + "</p>" : "") +
       disclosure(
         "This document",
         '<dl class="metrics">' +
           [
-            ["Disagreement", pctOf(reviewDoc.disagreement), "1 − mean word agreement between the models that read it"],
-            ["On numbers", pctOf(numbers), "The same, counting only tokens with digits: amounts, dates, ids"],
-            ["Characters", rec && isNum(rec.chars) ? String(rec.chars) : "—", "Length of this model's output"],
+            ["Disagreement", measured(reviewDoc.disagreement), "1 − mean word agreement between the models that read it"],
+            ["On numbers", measured(reviewDoc.numbers_disagreement), "The same, counting only tokens with digits: amounts, dates, ids"],
+            ["Characters", rec && isNum(rec.chars) ? String(rec.chars) : "not measured", "Length of this model's output"],
             ["Failed", String((reviewDoc.failed || []).length), (reviewDoc.failed || []).join(", ")],
           ]
             .map(function (it) {
@@ -3640,31 +3716,67 @@
     );
   }
 
-  function wireReviewForm(run, model, docId) {
+  function autoNext() {
+    try {
+      return localStorage.getItem("puffinparse-auto-next") !== "0";
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /** The verdict bar under the output: always in reach, one key per verdict, saved at once. */
+  function verdictBar(run, model, rec, reviewDoc) {
+    if (!rec || rec.missing) {
+      return '<div class="vbar"><p class="caption">This call was not made, so there is nothing to check. Resume the run to finish it.</p></div>';
+    }
+    var review = (reviewDoc.reviews || {})[model.model];
+    var verdicts = run.review.verdicts || Object.keys(VERDICT_LABELS);
+    return (
+      '<form class="vbar" id="review-form" aria-label="Your check">' +
+      '<div class="vbar-row"><span class="vbar-l">Your check</span><div class="verdicts" role="group" aria-label="Verdict">' +
+      verdicts
+        .map(function (v, i) {
+          return (
+            '<button type="button" class="vbtn v-' + esc(VERDICT_TONE[v] || "fair") + '" data-verdict="' + esc(v) + '" aria-pressed="' +
+            (!!review && review.verdict === v) + '" title="v then ' + (i + 1) + '"><kbd>' + (i + 1) + "</kbd>" + esc(VERDICT_LABELS[v] || v) + "</button>"
+          );
+        })
+        .join("") +
+      "</div></div>" +
+      '<div class="vbar-row"><label class="sr-only" for="review-notes">Note</label>' +
+      '<input id="review-notes" type="text" maxlength="2000" autocomplete="off" placeholder="What is wrong, if anything (Enter saves)" value="' +
+      esc(review ? review.notes || "" : "") + '">' +
+      '<button type="button" class="btn sm" id="next-unreviewed" title="Next unchecked output (n)">Next unchecked</button></div>' +
+      '<div class="vbar-row vbar-meta"><span class="review-status" id="review-status" role="status">' +
+      (review
+        ? esc("Checked by " + (review.by === "agent" ? "the agent" : "you") + " · " + dateFmt(review.at))
+        : "Not checked yet · keys: v then 1–4") +
+      '</span><label class="auto"><input type="checkbox" id="auto-next"' + (autoNext() ? " checked" : "") +
+      "> Go to the next unchecked after saving</label></div></form>"
+    );
+  }
+
+  function wireVerdictBar(run, manifest, model, docId) {
     var form = document.getElementById("review-form");
     if (!form) return;
+    var notes = document.getElementById("review-notes");
+    var status = document.getElementById("review-status");
+    var auto = document.getElementById("auto-next");
+    var buttons = Array.prototype.slice.call(form.querySelectorAll("button[data-verdict]"));
     var chosen = null;
-    form.querySelectorAll("button[data-verdict]").forEach(function (b) {
+    buttons.forEach(function (b) {
       if (b.getAttribute("aria-pressed") === "true") chosen = b.getAttribute("data-verdict");
-      b.addEventListener("click", function () {
-        chosen = b.getAttribute("data-verdict");
-        form.querySelectorAll("button[data-verdict]").forEach(function (other) {
-          other.setAttribute("aria-pressed", String(other === b));
-        });
-        document.getElementById("review-save").disabled = false;
-      });
     });
-    form.addEventListener("submit", function (e) {
-      e.preventDefault();
-      if (!chosen) return;
-      var status = document.getElementById("review-status");
-      var save = document.getElementById("review-save");
-      save.disabled = true;
+    function save(verdict, thenNext) {
+      chosen = verdict;
+      buttons.forEach(function (b) {
+        b.setAttribute("aria-pressed", String(b.getAttribute("data-verdict") === verdict));
+      });
       status.textContent = "Saving…";
       fetch(url("api/review"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ doc: docId, model: model.model, verdict: chosen, notes: document.getElementById("review-notes").value }),
+        body: JSON.stringify({ doc: docId, model: model.model, verdict: verdict, notes: notes.value }),
       })
         .then(function (resp) {
           return resp.json().then(function (body) {
@@ -3675,13 +3787,51 @@
         .then(function () {
           delete runCache[run.run_id];
           delete jsonCache[url("data/runs/" + enc(run.run_id) + ".json")];
+          return getRun(run.run_id);
+        })
+        .then(function (fresh) {
+          if (thenNext && goNextUnreviewed(fresh, manifest, docId, model.model, false)) return;
           render();
         })
         .catch(function (err) {
-          save.disabled = false;
           status.textContent = "Not saved: " + err.message;
         });
+    }
+    buttons.forEach(function (b) {
+      b.addEventListener("click", function () {
+        save(b.getAttribute("data-verdict"), auto.checked);
+      });
     });
+    notes.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        notes.blur();
+        return;
+      }
+      if (e.key !== "Enter" || e.metaKey || e.ctrlKey) return; // Ctrl/Cmd+Enter is the global save-and-next
+      e.preventDefault();
+      if (chosen) save(chosen, auto.checked);
+      else status.textContent = "Pick a verdict first: v then 1–4.";
+    });
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+    });
+    auto.addEventListener("change", function () {
+      try {
+        localStorage.setItem("puffinparse-auto-next", auto.checked ? "1" : "0");
+      } catch (e) {
+        /* private mode */
+      }
+    });
+    document.getElementById("next-unreviewed").addEventListener("click", function () {
+      goNextUnreviewed(run, manifest, docId, model.model, true);
+    });
+    REVIEW_KEYS.verdict = function (i) {
+      if (buttons[i]) save(buttons[i].getAttribute("data-verdict"), auto.checked);
+    };
+    REVIEW_KEYS.saveNext = function () {
+      if (chosen) save(chosen, true);
+      else goNextUnreviewed(run, manifest, docId, model.model, true);
+    };
   }
 
   /** The leaderboard of a review run: one row per model, ranked by checks then agreement. */
@@ -4018,6 +4168,176 @@
     return "documents|" + run.run_id;
   }
 
+  /* ------------------------------------------------------- review workspace */
+
+  function reducedMotion() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  /** On a wide screen the inspector fills the window below its header: page and output scroll inside. */
+  function fitWorkspace() {
+    var rv = document.getElementById("rv");
+    if (!rv) return;
+    if (window.innerWidth <= 960) {
+      rv.style.removeProperty("--rv-h");
+      return;
+    }
+    var top = rv.getBoundingClientRect().top + window.scrollY;
+    rv.style.setProperty("--rv-h", Math.max(420, window.innerHeight - top - 16) + "px");
+  }
+
+  var SPLIT_KEY = "puffinparse-split";
+
+  /** The draggable divider between the page and the output; its position is remembered. */
+  function wireSplit(rv) {
+    if (!rv) return;
+    var saved = null;
+    try {
+      saved = Number(localStorage.getItem(SPLIT_KEY));
+    } catch (e) {
+      /* private mode */
+    }
+    if (saved >= 25 && saved <= 75) rv.style.setProperty("--split", saved + "%");
+    var bar = rv.querySelector(".rv-split");
+    function set(pct, done) {
+      pct = Math.max(25, Math.min(75, pct));
+      rv.style.setProperty("--split", pct.toFixed(1) + "%");
+      if (!done) return;
+      try {
+        localStorage.setItem(SPLIT_KEY, String(Math.round(pct)));
+      } catch (e) {
+        /* private mode */
+      }
+      if (SV) SV.rerender();
+    }
+    bar.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+      bar.setPointerCapture(e.pointerId);
+      var box = rv.getBoundingClientRect();
+      var last = null;
+      function move(ev) {
+        last = ((ev.clientX - box.left) / box.width) * 100;
+        set(last, false);
+      }
+      function up() {
+        bar.removeEventListener("pointermove", move);
+        bar.removeEventListener("pointerup", up);
+        if (last !== null) set(last, true);
+      }
+      bar.addEventListener("pointermove", move);
+      bar.addEventListener("pointerup", up);
+    });
+    bar.addEventListener("keydown", function (e) {
+      var cur = parseFloat(rv.style.getPropertyValue("--split")) || 48;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        set(cur + (e.key === "ArrowLeft" ? -5 : 5), true);
+      }
+    });
+    view.querySelectorAll(".doc-details").forEach(function (d) {
+      d.addEventListener("toggle", fitWorkspace);
+    });
+  }
+
+  /** The Blocks tab: one card per block with a box, in page order, linked to its box. */
+  function blocksBody(overlay, model) {
+    if (!overlay || !overlay.count) {
+      return '<p class="empty">This model\'s response has no layout boxes for this document.</p>';
+    }
+    var pages = Object.keys(overlay.pages)
+      .map(Number)
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var multi = pages.length > 1;
+    return (
+      '<p class="caption">' + esc(plural(overlay.count, "block")) + " from " + esc(model.model) +
+      ". Point at a block to see it on the page; click a box on the page to find its block.</p>" +
+      '<div class="blocks">' +
+      pages
+        .map(function (pg) {
+          return (
+            (multi ? '<h3 class="blk-page">Page ' + pg + "</h3>" : "") +
+            overlay.pages[pg]
+              .map(function (b, i) {
+                var g = groupOf(b.type);
+                var conf = isNum(b.confidence) ? b.confidence : null;
+                var text = String(b.text || b.content || "");
+                return (
+                  '<div class="blk" tabindex="0" id="blk-' + pg + "-" + i + '" data-p="' + pg + '" data-i="' + i + '">' +
+                  '<div class="blk-h"><span class="sw bt-' + g.key + '" aria-hidden="true"></span><span class="blk-type">' +
+                  esc(b.type || g.label) + "</span>" +
+                  (conf !== null
+                    ? '<span class="blk-c' + (conf < 0.8 ? " low" : "") + '" title="Confidence the provider reported for this block">' +
+                      Math.round(conf * 100) + "%</span>"
+                    : "") +
+                  '</div><div class="md">' + (text.trim() ? renderMarkdown(text) : '<p class="empty">No text</p>') + "</div></div>"
+                );
+              })
+              .join("")
+          );
+        })
+        .join("") +
+      "</div>"
+    );
+  }
+
+  /** Handlers the verdict bar installs for the global keys (`v` then 1–4, Ctrl/Cmd+Enter). */
+  var REVIEW_KEYS = { verdict: null, saveNext: null };
+
+  /** Every output that can be checked (the call succeeded), in document then model order. */
+  function reviewPairs(run, manifest) {
+    var byDoc = recordsByDoc(run);
+    var models = byScore(run.models);
+    var pairs = [];
+    docList(run, manifest, new URLSearchParams()).forEach(function (d) {
+      models.forEach(function (m) {
+        var r = (byDoc[d.id] || {})[m.model];
+        if (!r || r.error || r.missing) return;
+        var checked = ((run.reviewByDoc[d.id] || {}).reviews || {})[m.model];
+        pairs.push({ doc: d.id, model: m.model, done: !!checked });
+      });
+    });
+    return pairs;
+  }
+
+  function reviewProgress(run, manifest) {
+    var pairs = reviewPairs(run, manifest);
+    if (!pairs.length) return "";
+    var done = pairs.filter(function (p) {
+      return p.done;
+    }).length;
+    var width = Math.round((done / pairs.length) * 100);
+    return (
+      '<div class="rv-progress"><span class="rv-bar" aria-hidden="true"><i style="width:' + width + '%"></i></span><span>' +
+      (done === pairs.length
+        ? "All " + pairs.length + ' outputs checked · <a href="' + esc(listHref("leaderboard", run.run_id)) + '">see the models</a>'
+        : esc(done + " of " + pairs.length + " outputs checked")) +
+      "</span></div>"
+    );
+  }
+
+  /** Open the next output nobody has checked yet, after the current one. False when there is none. */
+  function goNextUnreviewed(run, manifest, docId, modelName, announce) {
+    var pairs = reviewPairs(run, manifest);
+    var at = -1;
+    pairs.forEach(function (p, i) {
+      if (p.doc === docId && p.model === modelName) at = i;
+    });
+    for (var k = 1; k <= pairs.length; k++) {
+      var p = pairs[(at + k + pairs.length) % pairs.length];
+      if (!p.done && !(p.doc === docId && p.model === modelName)) {
+        go(docHref(run.run_id, p.model, p.doc, {}));
+        return true;
+      }
+    }
+    if (announce) {
+      var status = document.getElementById("review-status");
+      if (status) status.textContent = "Every output is checked.";
+    }
+    return false;
+  }
+
   /* ------------------------------------------------------------------ boot */
 
   function render() {
@@ -4026,6 +4346,10 @@
     var params = route.params;
     var name = parts[0] || "leaderboard";
     view.setAttribute("aria-busy", "true");
+    var main = document.getElementById("main");
+    if (main) main.classList.toggle("wide", !!findRun(parts[0]) && parts.length >= 3);
+    REVIEW_KEYS.verdict = null;
+    REVIEW_KEYS.saveNext = null;
     var task;
     try {
       if (name === "doc") {
@@ -4060,7 +4384,14 @@
   }
 
   var pendingG = false;
+  var pendingV = false;
+  var oDownAt = 0;
   function onKey(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && REVIEW_KEYS.saveNext) {
+      e.preventDefault();
+      REVIEW_KEYS.saveNext();
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     var t = e.target;
     var tag = t && t.tagName;
@@ -4079,6 +4410,30 @@
       var runId = direct ? direct.run_id : run;
       if (e.key === "l") go(listHref("leaderboard", runId));
       else if (e.key === "d") go(listHref("documents", runId));
+      return;
+    }
+    if (pendingV) {
+      pendingV = false;
+      if (/^[1-4]$/.test(e.key) && REVIEW_KEYS.verdict) {
+        e.preventDefault();
+        REVIEW_KEYS.verdict(Number(e.key) - 1);
+      }
+      return;
+    }
+    if (e.key === "v" && REVIEW_KEYS.verdict) {
+      pendingV = true;
+      setTimeout(function () {
+        pendingV = false;
+      }, 1500);
+      return;
+    }
+    // `o`: a tap toggles the boxes, holding it shows them until the key is released.
+    if (e.key === "o" && SV && SV.overlay && document.body.contains(SV.el)) {
+      e.preventDefault();
+      if (!e.repeat) {
+        oDownAt = Date.now();
+        SV.setPeek(true);
+      }
       return;
     }
     if (e.key === "g") {
@@ -4118,6 +4473,9 @@
     else if (helpBtn) helpBtn.hidden = true;
     if (HOME) document.getElementById("brand").setAttribute("href", HOME);
     if (MODE === "review") {
+      document.querySelectorAll(".review-only").forEach(function (el) {
+        el.hidden = false;
+      });
       var sub = document.querySelector(".brand-sub");
       if (sub) sub.textContent = "run viewer";
       var lb = document.getElementById("nav-leaderboard");
@@ -4133,11 +4491,19 @@
       docs.hidden = false;
     }
     document.addEventListener("keydown", onKey);
+    document.addEventListener("keyup", function (e) {
+      if (e.key !== "o" || !oDownAt || !SV) return;
+      var tapped = Date.now() - oDownAt < 300;
+      oDownAt = 0;
+      SV.setPeek(false);
+      if (tapped && KEYS.o) KEYS.o();
+    });
     var resizeTimer = null;
     window.addEventListener("resize", function () {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(function () {
         if (SV && document.body.contains(SV.el)) SV.rerender();
+        fitWorkspace();
       }, 250);
     });
   }
