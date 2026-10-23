@@ -11,6 +11,11 @@ Python package `puffinparse` share a single version. Entries before the rename s
 
 ### Added
 
+- Finding the best model takes one sentence to your agent ("use puffinparse to find the best model for
+  our documents in ~/docs"). The agent no longer asks about volume, budget, error tolerance, which
+  models or how to pay: it shortlists from what it sees and what you said, and asks once to approve
+  the models, the estimated cost and a cap.
+
 - Find the best model for your own documents: `puffinparse eval` (`scan`, `recommend`, `run`,
   `analyze`, `review`, `view`, `anonymize`) and ten matching MCP tools with a `find_best_model`
   prompt that walks a coding agent through it. `recommend` shortlists models from the newest

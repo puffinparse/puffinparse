@@ -169,9 +169,9 @@ fn scan_dataset(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutput, S
         "skipped": ds.skipped.iter().take(20).map(|s| json!({ "path": s.path, "reason": s.reason })).collect::<Vec<_>>(),
         "skipped_count": ds.skipped.len(),
         "existing_runs": runs,
-        "next": "Ask the user only what this does not answer (monthly volume, budget per 1,000 pages, error \
-                 tolerance, whether documents may leave their machine or need zero data retention, what matters \
-                 in them), then call recommend_models. Offer anonymize_dataset if the documents hold personal data.",
+        "next": "Call recommend_models now with whatever the user already told you (volume, budget, zero data \
+                 retention, what matters); do not ask a questionnaire, the defaults are fine. If the documents \
+                 look like they hold personal data, mention anonymize_dataset in the confirmation message.",
     });
     let text = format!(
         "{} documents, {} pages in {}{}. {}",
@@ -251,8 +251,9 @@ fn recommend_models(cfg: &Config, args: &Map<String, Value>) -> Result<ToolOutpu
     ok(
         structured.clone(),
         format!(
-            "{table}\nPresent these with their reasons, data handling and caveats, and ask the user which to run on \
-             their documents.\n\n{structured}"
+            "{table}\nPick up to four of these whose key is ready, plus a free local engine, and call run_dataset \
+             with dry_run=true. Then ask the user one question: run them for the estimated cost, with a cap? Name \
+             any model that would rank higher if its key were set, and the variable to set.\n\n{structured}"
         ),
     )
 }
@@ -748,9 +749,9 @@ pub(crate) fn definitions(features: Features) -> Vec<Value> {
         t(
             "scan_dataset",
             "Scan a folder of documents",
-            "Step 1 of finding the best model for the user's own documents. Counts the documents (PDF, images, office \
-             files) in a local folder: pages, types, the largest ones, any .truth.md references, and earlier runs. No \
-             network, nothing is sent anywhere. The prompt find_best_model describes the whole workflow.",
+            "Step 1 of finding the best model for the user's own documents (start here when they ask for that). Counts \
+             the documents (PDF, images, office files) in a local folder: pages, types, the largest ones, any .truth.md \
+             references, and earlier runs. No network, nothing is sent anywhere.",
             json!({ "type": "object", "properties": {
                 "path": { "type": "string", "description": "Local folder of representative documents (absolute path), or one document." }
             }, "required": ["path"] }),
@@ -761,8 +762,8 @@ pub(crate) fn definitions(features: Features) -> Vec<Value> {
             "Shortlist models for the user's needs",
             "Step 2. Ranks parse models for the user's requirements using PuffinParse's open benchmark (accuracy overall \
              and by document type), list prices, and each provider's documented data handling (zero data retention, \
-             retention, training), with reasons and caveats per model and whether its key is set. Ask the user only \
-             what you need first; every argument is optional. No network.",
+             retention, training), with reasons and caveats per model and whether its key is set. Every argument is \
+             optional: pass what the user said and keep the defaults for the rest. No network.",
             json!({ "type": "object", "properties": {
                 "monthly_pages": { "type": "integer", "description": "Expected pages per month (for monthly cost)." },
                 "max_usd_per_1k_pages": { "type": "number", "description": "Highest acceptable list price per 1,000 pages." },
@@ -782,8 +783,8 @@ pub(crate) fn definitions(features: Features) -> Vec<Value> {
             "run_dataset",
             "Run models over the documents",
             "Step 3. Runs the chosen models over every document in the folder and saves each output. Always call it with \
-             dry_run=true first and show the user the estimate; then start it with max_cost_usd (at least the estimate) \
-             once they agree. With via=\"keys\" (default) each document goes to the provider of each model using the key \
+             dry_run=true first; then ask the user once to approve the models, the estimate and a cap, and start it with \
+             max_cost_usd (at least the estimate) after a yes. A run of free local engines needs no approval. With via=\"keys\" (default) each document goes to the provider of each model using the key \
              in this server's environment, billed to the user. Runs in the background: poll run_status. resume finishes \
              an earlier run's missing or failed calls. For a first pass on long documents use pages (e.g. \"1-3\") or limit.",
             json!({ "type": "object", "properties": {
@@ -900,25 +901,28 @@ pub(crate) fn definitions(features: Features) -> Vec<Value> {
 
 pub const PROMPT_NAME: &str = "find_best_model";
 
-const WORKFLOW: &str = "Help me find the best document-parsing model for my own documents with the PuffinParse tools.
+const WORKFLOW: &str = "Find the best document-parsing model for my own documents with the PuffinParse tools. Keep \
+it simple for me: ask me at most one question, to approve the spend.
 
-1. Call scan_dataset on my folder{DATASET}. Tell me in two lines what is in it.{REQUIREMENTS}
-2. Ask me, in one short message, only what you still need: pages per month, budget per 1,000 pages, how many \
-errors I can live with, whether documents may leave my machine or need zero data retention, and what matters in \
-them (tables, scans, forms, handwriting, ...). If they may hold personal data, offer to anonymize them first with \
-anonymize_dataset (then check a few redacted pages and use the redacted folder).
-3. Call recommend_models with my answers and show me the top 5 as a short table: why each, price and monthly cost, \
-data handling, and whether its key is set. Ask which ones to run.
-4. Ask how to pay: my own provider keys (tell me which variables to set in this MCP server's config; never ask me \
-to paste a key into the chat), or a PuffinParse gateway key if I have one.
-5. Call run_dataset with dry_run=true, show me the estimate, and start it with max_cost_usd only after I say yes. \
-For a large folder, suggest a first pass with pages=\"1-3\" or a limit.
-6. Call run_status until it is done. Each call waits for the run (up to 30 seconds), so do not sleep or watch files in between.
-7. Call analyze_run. For the documents in review_queue (at least five, or all if fewer), read the original file \
+1. Call scan_dataset on my folder{DATASET}. Look at a few documents to see what matters in them (tables, scans, \
+forms, handwriting, other languages).{REQUIREMENTS}
+2. Call recommend_models with what you saw and anything I already said. Do not ask me about volume, budget or \
+error tolerance; the defaults are fine. Respect anything I said about zero data retention or keeping documents on \
+my machine.
+3. Pick up to four shortlisted models whose key is ready, plus a free local engine, and call run_dataset with \
+dry_run=true. For a large folder (over about 30 documents or 300 pages) plan a first pass on 20 documents, \
+pages=\"1-3\".
+4. Ask me once, in a few lines: what is in the folder, the models you picked and why, the estimated cost and a cap \
+(about 1.5 times the estimate, at least $1), any better model that needs a key (the variable to set in this MCP \
+server's config; never ask me to paste a key into the chat), and anonymize_dataset if the documents look personal. \
+If no key is set, say which variables to set and run the free local engines meanwhile.
+5. After my yes, start run_dataset with max_cost_usd. Call run_status until it is done. Each call waits for the run \
+(up to 30 seconds), so do not sleep or watch files in between.
+6. Call analyze_run. For the documents in review_queue (at least five, or all if fewer), read the original file \
 yourself, call get_output, compare each model with the page and record_review a verdict with a short note.
-8. Call analyze_run with write_report=true and your conclusion, then tell me: the model to use and the runner-up, \
-why (errors you saw, agreement, failures), cost per month at my volume, latency, data handling, and anything to \
-watch. Call open_viewer and give me the link so I can check the results myself.";
+7. Call analyze_run with write_report=true and your conclusion, then tell me briefly: the model to use and the \
+runner-up, why (errors you saw, agreement, failures), cost per 1,000 pages (per month too if I gave a volume), \
+latency, data handling, and anything to watch. Call open_viewer and give me the link so I can check the results myself.";
 
 pub fn prompt_definitions() -> Vec<Value> {
     vec![json!({

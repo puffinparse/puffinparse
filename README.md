@@ -503,12 +503,16 @@ provider of the model the agent calls. Cursor and Codex setup: [agents page](htt
 
 ### Find the best model for your own documents
 
-Point your agent at a folder of documents that covers your use case and ask it to find the best
-parsing model for them (the MCP server's `find_best_model` prompt). It asks a few questions (volume,
-budget, error tolerance, data retention), shortlists models from the benchmark, runs the ones you
-pick with your own keys under a spending cap, checks the documents where models disagree, and
-recommends one with its monthly cost. You can check every output yourself in a local viewer. The
-same steps without an agent:
+With the MCP server added to your agent, ask:
+
+> Use puffinparse to find the best model for our documents in ~/docs
+
+It looks at the folder, picks a few models from the benchmark, asks you once to approve the
+estimated cost, runs them with your keys, checks the documents where they disagree and recommends
+one. Mention anything that matters ("we need zero data retention", "about 50,000 pages a month")
+and it takes it into account. Every result can be checked next to its page in the local viewer.
+
+<details><summary>The same steps without an agent</summary>
 
 ```bash
 puffinparse eval scan ~/docs
@@ -518,6 +522,8 @@ puffinparse eval analyze ~/docs/.puffinparse/runs/<run> --write-report
 puffinparse eval view ~/docs/.puffinparse/runs/<run>             # the benchmark viewer, on your run
 puffinparse eval anonymize ~/docs --out ~/docs-redacted          # optional, redacts locally first
 ```
+
+</details>
 
 Details: [CLI](https://puffinparse.com/docs/cli/#puffinparse-eval) and [agents page](https://puffinparse.com/docs/agents/#find-the-best-model-for-your-documents).
 

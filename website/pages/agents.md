@@ -189,26 +189,26 @@ raise `tool_timeout_sec`.
 
 ## Find the best model for your documents
 
-Benchmarks rank models on someone else's documents. To pick one for yours, point your agent at a
-folder of documents that covers your use case (around 100 is plenty) and ask it to use the
-`find_best_model` prompt (optional arguments: `dataset`, and `requirements` such as "20,000 pages a
-month, under $10 per 1,000 pages, no ZDR needed" to skip those questions), or just say "find the best parsing model for the documents in ~/docs".
-In Claude Code the prompt is `/mcp__puffinparse__find_best_model`. The agent then:
+Benchmarks rank models on someone else's documents. To pick one for yours, put a sample of them in
+a folder (around 100 that cover your use case is plenty) and ask your agent:
 
-1. Scans the folder (`scan_dataset`) and tells you what is in it.
-2. Asks only what it still needs: pages per month, budget per 1,000 pages, how many errors you can
-   live with, whether documents may leave your machine or need zero data retention, and what
-   matters in them (tables, scans, forms, ...).
-3. Offers to anonymize the documents first if they may hold personal data.
-4. Shortlists about five models (`recommend_models`) and asks which ones to run.
-5. Asks how to pay: your own provider keys, set in the MCP server's environment (never pasted into
-   the chat), or a PuffinParse gateway key.
-6. Shows the estimate (`run_dataset` with `dry_run`), then runs the models with a spending cap once
-   you agree. Everything runs from your machine, straight to each provider.
-7. Analyzes the run, reads the originals of the documents where models disagree or failed,
-   compares each model's output with the page and records a verdict for each.
-8. Recommends a model and a runner-up with the reasons, monthly cost, latency and data handling,
-   and gives you a link to the viewer so you can check the results yourself.
+> Use puffinparse to find the best model for our documents in ~/docs
+
+That is all it needs. The agent:
+
+1. Looks at the folder (`scan_dataset`) and shortlists models from the benchmark, prices and data
+   handling (`recommend_models`), using only what you told it. It does not quiz you; say up front if
+   you need zero data retention, documents that never leave your machine, or a monthly volume.
+2. Asks you once: these models, on these documents, for about this much, capped at this much. A
+   better model whose key is not set is named with the variable to set in the MCP server's
+   environment (never paste a key into the chat).
+3. Runs them from your machine with your keys under the cap (`run_dataset`), reads the documents
+   where models disagree or failed, and records a verdict for each (`record_review`).
+4. Recommends a model and a runner-up with the reasons, cost, latency and data handling, and gives
+   you a link to the viewer to check the results yourself.
+
+In Claude Code the same workflow is also the `/mcp__puffinparse__find_best_model` prompt, which
+takes an optional `dataset` and `requirements`.
 
 **The viewer** (`open_viewer`, or `puffinparse eval view <run>`) is a local page that shows each
 document next to every model's output, rendered, as Markdown, or as a diff against another model,
