@@ -1,6 +1,7 @@
 //! `puffinparse` command-line interface.
 
 mod bench;
+mod eval;
 mod mcp;
 
 use anyhow::{Context, Result};
@@ -51,6 +52,9 @@ enum Command {
     /// Tools: parse, ocr, extract, list_models, compare. Provider keys are read from this process's
     /// environment and never returned. Documents go only to the providers of the models called.
     Mcp(McpArgs),
+    /// Find the best model for your own documents: scan, recommend, run, analyze, view, anonymize.
+    #[command(subcommand)]
+    Eval(eval::EvalCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -226,6 +230,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Extract(args) => extract(args).await,
         Command::Providers { mode, json } => providers(mode.as_deref(), json),
         Command::Bench(cmd) => bench::run(cmd).await,
+        Command::Eval(cmd) => eval::run(cmd).await,
         Command::Serve { config, host, port } => serve(config, host, port).await,
         Command::Mcp(args) => {
             let allow = mcp::AllowList::new(&args.models)?;

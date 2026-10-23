@@ -1423,12 +1423,14 @@ dependencies = [
  "indicatif",
  "puffinparse-core",
  "puffinparse-server",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

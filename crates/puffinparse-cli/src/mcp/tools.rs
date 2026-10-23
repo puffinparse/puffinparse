@@ -1,4 +1,5 @@
-//! The MCP tools: `parse`, `ocr`, `extract`, `list_models`, `compare`.
+//! The MCP tools: `parse`, `ocr`, `extract`, `list_models`, `compare` (the dataset tools are in
+//! `eval_tools.rs`).
 //!
 //! Each tool validates its arguments, resolves the model against the registry and the server's
 //! allow-list *before* any network call, then calls the same core entry points as the CLI. Provider
@@ -39,6 +40,8 @@ pub struct Config {
     pub max_retries: u32,
     /// `--root`: when set (canonical), local inputs must resolve inside this directory.
     pub root: Option<std::path::PathBuf>,
+    /// Background runs and viewers of the dataset tools (`eval_tools.rs`).
+    pub eval: std::sync::Arc<super::eval_tools::EvalState>,
     /// Test-only provider endpoints: model (`provider/model`) or provider name → (base URL, key).
     #[cfg(test)]
     pub endpoints: std::collections::BTreeMap<String, (String, String)>,
@@ -51,6 +54,7 @@ impl Config {
             timeout_secs,
             max_retries,
             root,
+            eval: Default::default(),
             #[cfg(test)]
             endpoints: Default::default(),
         }
@@ -64,6 +68,7 @@ impl Default for Config {
             timeout_secs: 300.0,
             max_retries: 2,
             root: None,
+            eval: Default::default(),
             #[cfg(test)]
             endpoints: Default::default(),
         }
@@ -135,7 +140,7 @@ pub struct ToolOutput {
 }
 
 impl ToolOutput {
-    fn ok(texts: Vec<String>, structured: Value) -> Self {
+    pub(crate) fn ok(texts: Vec<String>, structured: Value) -> Self {
         Self { texts, structured: Some(structured), is_error: false }
     }
 
@@ -163,31 +168,34 @@ pub async fn call(cfg: &Config, name: &str, args: &Map<String, Value>) -> ToolOu
         "extract" => extract(cfg, args).await,
         "list_models" => list_models(cfg, args),
         "compare" => compare(cfg, args).await,
-        other => Err(format!("unknown tool '{other}'")),
+        other => match super::eval_tools::call(cfg, other, args).await {
+            Some(r) => r,
+            None => Err(format!("unknown tool '{other}'")),
+        },
     };
     result.unwrap_or_else(ToolOutput::error)
 }
 
 // ---- argument helpers ----------------------------------------------------------------------------
 
-struct Args<'a> {
+pub(crate) struct Args<'a> {
     map: &'a Map<String, Value>,
 }
 
 impl<'a> Args<'a> {
     /// Reject unknown argument names, so a typo (`page` for `pages`) is reported, not ignored.
-    fn new(map: &'a Map<String, Value>, accepted: &[&str]) -> Result<Self, String> {
+    pub(crate) fn new(map: &'a Map<String, Value>, accepted: &[&str]) -> Result<Self, String> {
         if let Some(k) = map.keys().find(|k| !accepted.contains(&k.as_str())) {
             return Err(format!("unknown argument '{k}' (accepted: {})", accepted.join(", ")));
         }
         Ok(Self { map })
     }
 
-    fn get(&self, k: &str) -> Option<&'a Value> {
+    pub(crate) fn get(&self, k: &str) -> Option<&'a Value> {
         self.map.get(k).filter(|v| !v.is_null())
     }
 
-    fn string(&self, k: &str) -> Result<Option<String>, String> {
+    pub(crate) fn string(&self, k: &str) -> Result<Option<String>, String> {
         match self.get(k) {
             None => Ok(None),
             Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
@@ -196,11 +204,11 @@ impl<'a> Args<'a> {
         }
     }
 
-    fn required_string(&self, k: &str) -> Result<String, String> {
+    pub(crate) fn required_string(&self, k: &str) -> Result<String, String> {
         self.string(k)?.ok_or_else(|| format!("argument '{k}' is required"))
     }
 
-    fn bool(&self, k: &str) -> Result<Option<bool>, String> {
+    pub(crate) fn bool(&self, k: &str) -> Result<Option<bool>, String> {
         match self.get(k) {
             None => Ok(None),
             Some(Value::Bool(b)) => Ok(Some(*b)),
@@ -208,7 +216,7 @@ impl<'a> Args<'a> {
         }
     }
 
-    fn count(&self, k: &str, default: usize, max: usize) -> Result<usize, String> {
+    pub(crate) fn count(&self, k: &str, default: usize, max: usize) -> Result<usize, String> {
         match self.get(k) {
             None => Ok(default),
             Some(v) => match v.as_u64() {
@@ -251,7 +259,7 @@ fn input(cfg: &Config, file: &str) -> Result<String, String> {
 }
 
 /// Resolve a model string for `mode` and check it against the allow-list. No network.
-fn resolve_model(cfg: &Config, model: &str, mode: Mode) -> Result<String, String> {
+pub(crate) fn resolve_model(cfg: &Config, model: &str, mode: Mode) -> Result<String, String> {
     let qualified = ModelRef::parse_for(model, mode).map_err(|e| error_text(&e))?.qualified();
     if !cfg.allow.allows(&qualified) {
         return Err(format!(
@@ -733,7 +741,7 @@ fn object_schema(mut props: Map<String, Value>, extra: Value, required: &[&str])
     json!({ "type": "object", "properties": props, "required": required })
 }
 
-fn tool(
+pub(crate) fn tool(
     features: Features,
     name: &str,
     title: &str,

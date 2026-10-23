@@ -56,7 +56,26 @@ fn dict_start(data: &[u8], at: usize) -> usize {
 }
 
 /// The number of pages in a PDF, or `None` when it cannot be told.
+///
+/// An upper bound, for metering: the larger of the page objects found and the page tree's count,
+/// so a file whose `/Count` understates its pages is not under-counted. A PDF saved with
+/// incremental updates repeats edited page objects, so this can over-count; see
+/// [`pdf_pages_estimate`] for a display count.
 pub fn pdf_pages(data: &[u8]) -> Option<u32> {
+    let (objects, tree) = page_counts(data);
+    let n = objects.max(tree);
+    (n > 0).then_some(n)
+}
+
+/// The page tree's own count when it has one (what a PDF reader shows), else the page objects.
+/// For estimates shown to a person, not for metering untrusted input.
+pub fn pdf_pages_estimate(data: &[u8]) -> Option<u32> {
+    let (objects, tree) = page_counts(data);
+    let n = if tree > 0 { tree } else { objects };
+    (n > 0).then_some(n)
+}
+
+fn page_counts(data: &[u8]) -> (u32, u32) {
     let mut objects = count_page_objects(data);
     let mut tree = max_count(data);
     let mut budget = MAX_INFLATED;
@@ -73,8 +92,7 @@ pub fn pdf_pages(data: &[u8]) -> Option<u32> {
         objects += count_page_objects(&out);
         tree = tree.max(max_count(&out));
     }
-    let n = objects.max(tree);
-    (n > 0).then_some(n)
+    (objects, tree)
 }
 
 fn is_delim(b: Option<&u8>) -> bool {
@@ -212,6 +230,14 @@ mod tests {
     fn the_page_tree_count_wins_when_page_objects_are_unreadable() {
         let pdf = b"%PDF-1.7\n1 0 obj << /Type /Pages /Count 40 /Kids [] >> endobj\n2 0 obj << /Type /Page >> endobj";
         assert_eq!(pdf_pages(pdf), Some(40));
+    }
+
+    #[test]
+    fn the_estimate_ignores_page_objects_repeated_by_incremental_updates() {
+        // One page, saved twice: the edited page object appears again after the first %%EOF.
+        let pdf = b"%PDF-1.4\n1 0 obj << /Type /Pages /Count 1 /Kids [2 0 R] >> endobj\n2 0 obj << /Type /Page /Parent 1 0 R >> endobj\n%%EOF\n2 0 obj << /Type /Page /Parent 1 0 R /Rotate 90 >> endobj\n%%EOF\n";
+        assert_eq!(pdf_pages(pdf), Some(2));
+        assert_eq!(pdf_pages_estimate(pdf), Some(1));
     }
 
     #[test]

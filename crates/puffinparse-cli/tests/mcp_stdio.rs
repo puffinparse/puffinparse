@@ -33,7 +33,7 @@ fn mcp_over_real_stdio() {
     assert!(roundtrip(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).is_none());
 
     let list = roundtrip(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).unwrap();
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 15);
 
     let models = roundtrip(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
         "params": { "name": "list_models", "arguments": { "mode": "parse" } } }))

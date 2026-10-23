@@ -164,14 +164,39 @@ async fn initialize_then_list_tools() {
     let list = c.request(1, "tools/list", json!({})).await;
     let tools = list["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["parse", "ocr", "extract", "list_models", "compare"]);
+    assert_eq!(
+        names,
+        [
+            "parse",
+            "ocr",
+            "extract",
+            "list_models",
+            "compare",
+            "scan_dataset",
+            "recommend_models",
+            "run_dataset",
+            "run_status",
+            "cancel_run",
+            "analyze_run",
+            "get_output",
+            "record_review",
+            "open_viewer",
+            "anonymize_dataset"
+        ]
+    );
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert_eq!(t["outputSchema"]["type"], "object", "{t}");
         assert!(t["title"].is_string());
-        assert_eq!(t["annotations"]["readOnlyHint"], true);
         assert_eq!(t["annotations"]["destructiveHint"], false);
     }
+    for t in &tools[..5] {
+        assert_eq!(t["annotations"]["readOnlyHint"], true);
+    }
+    // run_dataset bills the user; the tools that write into a run folder are not read-only.
+    let run = tools.iter().find(|t| t["name"] == "run_dataset").unwrap();
+    assert_eq!(run["annotations"]["openWorldHint"], true);
+    assert_eq!(run["annotations"]["readOnlyHint"], false);
     for name in ["parse", "ocr", "extract", "compare"] {
         let t = tools.iter().find(|t| t["name"] == name).unwrap();
         assert!(t["description"].as_str().unwrap().contains("sent to the provider"), "{name}");
@@ -218,7 +243,7 @@ async fn modern_stateless_requests() {
     assert_eq!(list["result"]["resultType"], "complete");
     assert_eq!(list["result"]["cacheScope"], "public");
     assert!(list["result"]["ttlMs"].is_u64());
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 15);
 
     let mut params = modern_meta();
     params["name"] = json!("list_models");
@@ -600,4 +625,160 @@ async fn root_confines_local_inputs() {
     let r = c.call(7, "compare", json!({ "file": "https://example.com/a.png", "models": ["reducto/nope"] })).await;
     assert!(text(&r).contains("unknown model 'nope'"), "{r}");
     let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---- find the best model for a dataset -----------------------------------------------------------
+
+#[tokio::test]
+async fn dataset_workflow_end_to_end() {
+    let dir = std::env::temp_dir().join(format!("puffinparse-mcp-dataset-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("scans")).unwrap();
+    for name in ["a.png", "b.png", "scans/c.png"] {
+        std::fs::write(dir.join(name), b"\x89PNG\r\n\x1a\nnot really a png").unwrap();
+    }
+    let path = dir.to_string_lossy().into_owned();
+    let mut c = Client::start(mock_config().await);
+    c.initialize("2025-06-18").await;
+
+    // The guided prompt.
+    let prompts = c.request(1, "prompts/list", json!({})).await;
+    assert_eq!(prompts["result"]["prompts"][0]["name"], "find_best_model");
+    let p = c
+        .request(
+            2,
+            "prompts/get",
+            json!({ "name": "find_best_model", "arguments": { "dataset": "/data/docs", "requirements": "5k pages a month" } }),
+        )
+        .await;
+    let msg = p["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(msg.contains("scan_dataset on my folder (/data/docs)") && msg.contains("record_review"));
+    assert!(msg.contains("my needs: 5k pages a month.") && !msg.contains("{REQUIREMENTS}"));
+    assert!(c.request(3, "prompts/get", json!({ "name": "nope" })).await["error"].is_object());
+
+    let scan = c.call(4, "scan_dataset", json!({ "path": path })).await;
+    assert_eq!(scan["isError"], false, "{scan}");
+    assert_eq!(scan["structuredContent"]["documents"], 3);
+    assert_eq!(scan["structuredContent"]["total_pages"], 3);
+
+    let rec = c
+        .call(5, "recommend_models", json!({ "monthly_pages": 50000, "zdr_required": true, "needs": ["tables"] }))
+        .await;
+    assert_eq!(rec["isError"], false, "{rec}");
+    let cands = rec["structuredContent"]["candidates"].as_array().unwrap();
+    assert!(!cands.is_empty());
+    assert!(cands.iter().all(|c| c["data_handling"]["zdr"] != "unknown" && c["data_handling"]["zdr"] != "no"));
+
+    let models = json!(["mistral/ocr-latest", "mistral/ocr-2512"]);
+    let dry = c.call(6, "run_dataset", json!({ "dataset": path, "models": models, "dry_run": true })).await;
+    assert_eq!(dry["isError"], false, "{dry}");
+    let est = dry["structuredContent"]["plan"]["estimate_usd"].as_f64().unwrap();
+    assert!((est - 0.018).abs() < 1e-9, "{est}");
+    // A priced run does not start without the user's limit.
+    let refused = c.call(7, "run_dataset", json!({ "dataset": path, "models": models })).await;
+    assert_eq!(refused["isError"], true);
+    assert!(text(&refused).contains("max_cost_usd"));
+    // Models outside the allow-list or the mode are refused before anything runs.
+    let bad =
+        c.call(8, "run_dataset", json!({ "dataset": path, "models": ["reducto/extract"], "dry_run": true })).await;
+    assert_eq!(bad["isError"], true);
+
+    let started = c
+        .call(
+            9,
+            "run_dataset",
+            json!({ "dataset": path, "models": models, "max_cost_usd": 1.0, "requirements": { "monthly_pages": 50000 } }),
+        )
+        .await;
+    assert_eq!(started["isError"], false, "{started}");
+    let run = started["structuredContent"]["run"].as_str().unwrap().to_string();
+
+    let mut id = 10;
+    let status = loop {
+        let s = c.call(id, "run_status", json!({ "run": run })).await;
+        id += 1;
+        if s["structuredContent"]["status"] != "running" {
+            break s;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(id < 300, "run did not finish: {s}");
+    };
+    assert_eq!(status["structuredContent"]["status"], "complete", "{status}");
+    assert_eq!(status["structuredContent"]["progress"]["done"], 6);
+    assert_eq!(status["structuredContent"]["progress"]["failed"], 3);
+
+    let analysis = c.call(id, "analyze_run", json!({ "run": run })).await;
+    id += 1;
+    assert_eq!(analysis["isError"], false, "{analysis}");
+    let per_model = analysis["structuredContent"]["per_model"].as_array().unwrap();
+    let ok_model = per_model.iter().find(|m| m["model"] == "mistral/ocr-latest").unwrap();
+    assert_eq!(ok_model["ok"], 3);
+    assert_eq!(ok_model["monthly_usd"].as_f64(), Some(200.0));
+    let queue = analysis["structuredContent"]["review_queue"].as_array().unwrap();
+    assert_eq!(queue.len(), 3, "every document has a failure");
+    let doc = queue[0]["doc"].as_str().unwrap().to_string();
+
+    let out = c.call(id, "get_output", json!({ "run": run, "doc": doc })).await;
+    id += 1;
+    assert_eq!(out["isError"], false, "{out}");
+    let outs = out["structuredContent"]["outputs"].as_array().unwrap();
+    assert_eq!(outs[0]["ok"], true);
+    assert!(!outs[0]["markdown"].as_str().unwrap().is_empty());
+    assert_eq!(outs[1]["ok"], false);
+
+    let review = c
+        .call(
+            id,
+            "record_review",
+            json!({ "run": run, "doc": doc, "model": "mistral/ocr-latest", "verdict": "correct" }),
+        )
+        .await;
+    id += 1;
+    assert_eq!(review["isError"], false, "{review}");
+    let report = c
+        .call(id, "analyze_run", json!({ "run": run, "write_report": true, "conclusion": "Use mistral/ocr-latest." }))
+        .await;
+    id += 1;
+    assert!(std::fs::read_to_string(std::path::Path::new(&run).join("report.md"))
+        .unwrap()
+        .contains("Use mistral/ocr-latest."));
+    assert!(text(&report).contains("| 1/1 |"), "{}", text(&report));
+
+    let viewer = c.call(id, "open_viewer", json!({ "run": run })).await;
+    id += 1;
+    let url = viewer["structuredContent"]["url"].as_str().unwrap().to_string();
+    assert!(url.starts_with("http://127.0.0.1:"));
+    let again = c.call(id, "open_viewer", json!({ "run": run })).await;
+    assert_eq!(again["structuredContent"]["url"], url.as_str(), "one viewer per run");
+    let page = reqwest::get(&url).await.unwrap();
+    assert_eq!(page.status(), 200);
+
+    // No key or path ever leaks into the transcript.
+    assert!(!c.transcript.iter().any(|l| l.contains(TEST_KEY)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn dataset_tools_respect_root() {
+    let inside = std::env::temp_dir().join(format!("puffinparse-mcp-root-in-{}", std::process::id()));
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::write(inside.join("a.png"), b"\x89PNG\r\n\x1a\nx").unwrap();
+    let cfg = Config { root: Some(std::fs::canonicalize(&inside).unwrap()), ..Config::default() };
+    let mut c = Client::start(cfg);
+    c.initialize("2025-06-18").await;
+    let ok = c.call(1, "scan_dataset", json!({ "path": inside })).await;
+    assert_eq!(ok["isError"], false, "{ok}");
+    let outside = c.call(2, "scan_dataset", json!({ "path": std::env::temp_dir() })).await;
+    assert_eq!(outside["isError"], true);
+    assert!(text(&outside).contains("--root"));
+    let anon = c
+        .call(3, "anonymize_dataset", json!({ "dataset": inside, "out": std::env::temp_dir().join("pp-anon-outside") }))
+        .await;
+    assert_eq!(anon["isError"], true);
+    // `..` below a folder that does not exist yet would only be resolved when writing.
+    let sneaky = format!("{}/new/../../pp-anon-escape", inside.display());
+    let anon = c.call(4, "anonymize_dataset", json!({ "dataset": inside, "out": sneaky })).await;
+    assert_eq!(anon["isError"], true);
+    assert!(text(&anon).contains(".."), "{anon}");
+    let _ = std::fs::remove_dir_all(&inside);
 }

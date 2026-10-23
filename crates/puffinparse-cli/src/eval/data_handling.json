@@ -1,0 +1,191 @@
+{
+  "checked": "2026-10-12",
+  "legend": {
+    "zdr": "self_serve = customer can turn it on without vendor approval (API parameter, key/org setting, or plan sign-up); enterprise = needs vendor approval, a sales contract, or a sales-only tier (see notes for which); no = provider says it is not offered for this API; unknown = not documented in primary sources found",
+    "training_on_data": "no = provider states customer data is not used for training by default; yes = may be used by default; opt_out = used or may be used by default unless the customer turns it off; unknown = not documented"
+  },
+  "providers": {
+    "reducto": {
+      "zdr": "enterprise",
+      "default_retention": "Growth tier and above: all API-submitted data expires within 24 hours (Reducto calls this its ZDR policy). Exceptions: Studio-run jobs and results saved with persist_results: true. Retention for the self-serve Standard tier is not documented.",
+      "training_on_data": "unknown",
+      "how": "Applies automatically by tier (Growth/Enterprise, both 'Contact sales'; the pricing page lists a 'Zero Data Retention Agreement' under Growth). Request parameter persist_results: true opts OUT of the 24h purge. DELETE /job/{job_id} (with include_persisted=true) and DELETE /upload/{file_id} delete sooner.",
+      "sources": [
+        "https://docs.reducto.ai/security/policies.md",
+        "https://docs.reducto.ai/workflows/deletion.md",
+        "https://reducto.ai/pricing"
+      ],
+      "notes": "Reducto's 'ZDR' is a 24h expiry, not processing without any storage. Its no-training statement covers only 'Growth tier and above'; the Standard (self-serve) tier is not addressed. Retention of uploads is 'managed separately'."
+    },
+    "extend": {
+      "zdr": "enterprise",
+      "default_retention": "Automatic retention policies 'vary in default length by billing tier' and can be configured. The actual durations are not published.",
+      "training_on_data": "unknown",
+      "how": "Request-level: dataRetention: {mode: 'zero'} in the parse API body (e.g. POST /parse_runs), only for 'eligible organizations and plans'. mode 'workspace_default' or omitting it uses the workspace policy. Workspace-level ZDR (deleted within 24h) is 'supported for all tiers and plans upon request' through your rep or support. Delete endpoints exist for files and parser, processor and workflow runs.",
+      "sources": [
+        "https://docs.extend.ai/2026-02-09/security/data-handling"
+      ],
+      "notes": "Not a pure self-serve flag: the request parameter works only once Extend enables eligibility, and the workspace setting is by request (available on any plan). Extend says it processes Customer Data 'only to execute the document-processing tasks you configure', and its model and GPU subprocessors are under zero-retention and no-training terms. The page does not explicitly state Extend's own training policy."
+    },
+    "llamaparse": {
+      "zdr": "unknown",
+      "default_retention": "Uploaded Parse source files and the parse cache: 48 hours, then permanently deleted. No retention period is published for job results (an expired job returns 404). Index data is kept for the term of the agreement.",
+      "training_on_data": "no",
+      "how": "Request flag do_not_cache=true skips caching entirely (privacy page); the newer data-retention page names disable_cache: true, which forces a fresh parse. Data can be deleted on demand through the API or UI.",
+      "sources": [
+        "https://developers.llamaindex.ai/llamaparse/general/enterprise-readiness/data-privacy-security/",
+        "https://developers.llamaindex.ai/llamaparse/general/data_retention/"
+      ],
+      "notes": "No customer-facing ZDR mode is documented. 'Zero-data-retention' appears only for LlamaIndex's agreements with its third-party LLM providers. Training is off by default and is opt-in through an admin-enabled data-sharing program."
+    },
+    "mistral": {
+      "zdr": "enterprise",
+      "default_retention": "API input and output are kept for the time needed to generate the output, then for 30 rolling days for abuse monitoring, unless ZDR is active ('except for specific APIs').",
+      "training_on_data": "opt_out",
+      "how": "Organization-level ZDR on request through the Help Center or support. Requires a paid (pay-as-you-go) plan, Mistral approves or denies at its discretion, and it then shows in Admin privacy settings. Covers stateless endpoints including /v1/ocr. It does not cover /v1/files, batch, agents, conversations or libraries. Training opt-out: Admin > Privacy > 'Anonymous improvement data' toggle.",
+      "sources": [
+        "https://docs.mistral.ai/admin/monitor-comply/zero-data-retention.md",
+        "https://help.mistral.ai/en/articles/347612-can-i-activate-zero-data-retention-zdr",
+        "https://legal.mistral.ai/terms/privacy-policy/",
+        "https://help.mistral.ai/en/articles/347617-do-you-use-my-user-data-to-train-your-artificial-intelligence-models",
+        "https://help.mistral.ai/en/articles/455207-can-i-opt-out-of-my-input-or-output-data-being-used-for-training"
+      ],
+      "notes": "Free mode: Mistral 'may use your data (input and output) to train', with opt-out. Pay-as-you-go: opt-out available, but the default is not explicitly stated. OCR via the batch API or uploaded /v1/files falls outside ZDR. A third-party search snippet claimed OCR has ZDR by default; the current official pages do not say that."
+    },
+    "azure": {
+      "zdr": "unknown",
+      "default_retention": "Submitted input and analyze results are stored temporarily in Azure Storage in the same region and deleted automatically 24 hours after the analysis operation completes.",
+      "training_on_data": "unknown",
+      "how": "The Delete Analyze Result API (v4.0) permanently deletes input and result sooner. No zero-retention setting is documented. Batch analysis writes to the customer's own storage container.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/document-intelligence/data-privacy-security",
+        "https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/faq?view=doc-intel-4.0.0"
+      ],
+      "notes": "The official Document Intelligence privacy page and FAQ do not explicitly mention model training. Only Microsoft Q&A moderator answers say it is not used, and those are not authoritative. Check the Microsoft Products and Services DPA if this matters."
+    },
+    "textract": {
+      "zdr": "unknown",
+      "default_retention": "Async job results are encrypted and stored for 7 days in a Textract-owned bucket, unless OutputConfig names your S3 bucket. Textract 'may store and use document and image inputs' to provide, maintain and improve the service; no duration is stated.",
+      "training_on_data": "opt_out",
+      "how": "AWS Organizations AI services opt-out policy (account or org level) stops use for service improvement and deletes historical copies kept for that purpose. Deletion of inputs can also be requested through AWS Support. OutputConfig sends async output to your own bucket.",
+      "sources": [
+        "https://aws.amazon.com/textract/faqs/",
+        "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_ai-opt-out.html",
+        "https://docs.aws.amazon.com/textract/latest/dg/api-async.html"
+      ],
+      "notes": "No named ZDR offering. The opt-out is self-serve through AWS Organizations, but it covers service-improvement use, not the operational 7-day async result storage."
+    },
+    "gemini": {
+      "zdr": "no",
+      "default_retention": "Paid tier: prompts and responses are logged 'for a limited period' for abuse monitoring; the usage-policies page says 55 days. Grounding with Google Search or Maps stores data for 30 days and cannot be disabled. The Interactions API stores state by default. Files API files are kept until deleted or expired. Implicit caching keeps data in RAM only, for 24h.",
+      "training_on_data": "no",
+      "how": "In the Gemini Developer API you approach zero retention by avoiding features: set store=false on the Interactions API, skip Grounding, skip SessionResumptionConfig and explicit caching. Abuse logging cannot be turned off there. For 'guaranteed zero data retention' Google points you to Vertex AI (Gemini Enterprise Agent Platform), which has self-serve ZDR controls.",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/zdr",
+        "https://ai.google.dev/gemini-api/docs/usage-policies",
+        "https://ai.google.dev/gemini-api/terms"
+      ],
+      "notes": "'No training' applies to Paid Services only (a Cloud project with active billing). Unpaid-tier content may be used to improve products and may be read by human reviewers. ZDR is 'no' for ai.google.dev; it is available on Vertex AI, which was not researched in depth."
+    },
+    "openai": {
+      "zdr": "enterprise",
+      "default_retention": "Abuse-monitoring logs are kept for up to 30 days. Responses API application state is kept 30 days by default (store defaults to true). Files are kept until deleted, or until expires_after.",
+      "training_on_data": "no",
+      "how": "Org- or project-level Zero Data Retention or Modified Abuse Monitoring, 'subject to prior approval by OpenAI'; contact sales. Under ZDR, store is forced to false. Setting store:false alone does not give ZDR. /v1/files, batch, fine-tuning, conversations, threads and vector stores are not ZDR-eligible.",
+      "sources": [
+        "https://developers.openai.com/api/docs/guides/your-data"
+      ],
+      "notes": "API data is not used for training unless the customer explicitly opts in."
+    },
+    "anthropic": {
+      "zdr": "enterprise",
+      "default_retention": "API inputs and outputs are deleted from the backend within 30 days. Exceptions: Files API (kept until you delete), ZDR agreements, Usage Policy enforcement (flagged content up to 2 years), and legal requirements.",
+      "training_on_data": "no",
+      "how": "Per-organization ZDR arrangement through the Anthropic sales team or account rep. Covers the Messages and Token Counting APIs for eligible features. Excluded: code execution and some other features, plus Covered Models (Claude Fable 5/5.1 and Mythos 5/5.1), which require 30-day retention unless Anthropic expressly authorizes otherwise.",
+      "sources": [
+        "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention",
+        "https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data"
+      ],
+      "notes": "'Retained data is never used for model training without your express permission.' HIPAA readiness is self-serve in the Console, but ZDR is not."
+    },
+    "mathpix": {
+      "zdr": "self_serve",
+      "default_retention": "Images in the QA database: default 30 days per the pricing FAQ, while the Privacy FAQ says all are deleted after 90 days (24h for images with PII). v3/pdf uploads and page images: up to 30 days. Mathpix Markdown and JSON Lines outputs: up to 90 days.",
+      "training_on_data": "unknown",
+      "how": "Per API key: turn 'Improve Mathpix' off, or enable 'Data Retention Opt-Out' in the OCR API settings ('No Data Retention': images and results deleted within 24h, never saved to disk). Per request: improve_mathpix: false. The key setting overrides the request flag. For v3/pdf, improve_mathpix:false deletes only the source document immediately, not page images or text outputs. Immediate deletion: contact support.",
+      "sources": [
+        "https://mathpix.com/docs/convert/privacy",
+        "https://mathpix.com/pricing/api"
+      ],
+      "notes": "The two official pages disagree (30 vs 90 days for QA images). Mathpix says images are used only for QA and bug finding and 'not for any purpose other than providing the requested service', but it makes no explicit training statement. Its self-serve opt-out is 'within 24h', not true zero."
+    },
+    "datalab": {
+      "zdr": "unknown",
+      "default_retention": "Conversion results are deleted from Datalab servers about one day after processing completes. DELETE /api/v1/results/{request_id} removes them sooner, and uploaded source files can be deleted the same way.",
+      "training_on_data": "no",
+      "how": "Training use is an opt-in team setting, with a 25% discount for opting into data retention. 'Platform Features' retention must be opted into to use the Playground request view. Delete endpoint for early removal.",
+      "sources": [
+        "https://documentation.datalab.to/platform/security",
+        "https://documentation.datalab.to/docs/recipes/marker/conversion-api-overview",
+        "https://datalab.to/plans",
+        "https://www.datalab.to/blog/view-your-api-requests-in-our-playground"
+      ],
+      "notes": "No ZDR offering is named in the docs. A Datalab blog post says Chandra on the hosted API has 'zero data retention by default', but that is marketing and model-specific, not documented for the Marker or convert API. Public Playground submissions may be used for training under the EULA (privacy page, possibly stale)."
+    },
+    "unstructured": {
+      "zdr": "unknown",
+      "default_retention": "Not documented for the self-serve Platform. Dedicated instances: 'does not store customer data long-term'; artifacts are used ephemerally and removed after workflow completion or failure. Platform terms: customer may export data for 30 days after termination.",
+      "training_on_data": "yes",
+      "how": "The pricing page lists 'Zero Data Retention' under Data Security without saying which tier includes it. A signed Subscription Agreement or Software License Agreement replaces the Platform Terms for data submitted after it is signed.",
+      "sources": [
+        "https://unstructured.io/platform-terms-of-service",
+        "https://unstructured.io/pricing",
+        "https://docs.unstructured.io/business/dedicated-instances/security/security-common-questions"
+      ],
+      "notes": "Important: Platform Terms of Service section 3.2(a) grants Unstructured a 'worldwide, perpetual, irrevocable ... license to ... process Customer Data for purposes of developing, training, improving ... Unstructured's machine learning models', and 3.2(b) says Customer Data 'is not confidential'. That covers self-serve (Free/PAYG) users under those terms. Dedicated-instance data is 'not used to train models'. Third-party AI providers are bound not to train."
+    },
+    "upstage": {
+      "zdr": "unknown",
+      "default_retention": "Privacy policy (updated 2026-06-01): Console asynchronous API requests are stored until completion and results 30 days after completion. Synchronous inference providers do not save data after temporary use. API input/output logging for quality improvement is kept 'as notified at the time of separate consent'.",
+      "training_on_data": "unknown",
+      "how": "No ZDR option documented for the Document Parse API.",
+      "sources": [
+        "https://www.upstage.ai/privacy-policy/updated-jun-01-2026",
+        "https://console.upstage.ai/docs/getting-started"
+      ],
+      "notes": "Conflicting official statements: the getting-started docs say 'we do not store or reuse any data sent to our APIs', but the privacy policy says async results are stored 30 days. Playground and Studio uploads may be used to improve and develop services. API training use is not stated."
+    },
+    "landingai": {
+      "zdr": "self_serve",
+      "default_retention": "Without ZDR, retention is 'governed by the terms of your agreement'; no default duration is published. With ZDR: sync results are not retained, and async Gen2 job results are deleted on first fetch or automatically 24-48h after completion if never fetched.",
+      "training_on_data": "yes",
+      "how": "Organization-level toggle on the Organization Settings page, Team and Enterprise plans only (not Explore/PAYG), with a separate checkbox for the Playground. No per-request parameter. Gen2 jobs with output_save_url deliver to your storage, then delete immediately.",
+      "sources": [
+        "https://docs.landing.ai/ade/zdr",
+        "https://landing.ai/security-at-landingai"
+      ],
+      "notes": "Without ZDR: 'Your data may be used to provide and improve the services and products'. With ZDR it is 'never used for training or improving our models'. ZDR is required for HIPAA/BAA. The Ground API is unavailable under ZDR."
+    },
+    "google_documentai": {
+      "zdr": "self_serve",
+      "default_retention": "Online (sync) requests are processed in memory and not persisted to disk (some request metadata is logged). Batch: stored documents are typically deleted right after processing, with a failsafe TTL of 1 day.",
+      "training_on_data": "no",
+      "how": "The default for online (:process) requests, which is what PuffinParse sends: processed in memory, not written to disk. No separate ZDR program.",
+      "sources": [
+        "https://docs.cloud.google.com/document-ai/docs/security"
+      ],
+      "notes": "'Google does not use any of your content (such as documents and predictions) for any purpose except to provide you with the Document AI service' (Cloud ToS section 17). Generative or custom-extractor features may carry other terms; not checked."
+    },
+    "opendocrouter": {
+      "zdr": "self_serve",
+      "default_retention": "Default (cache: false, sync only): documents and results are not stored after the response. Records of each request are kept (page counts, tokens, errors, charges). Uploads are deleted once a request reads them, or an hour after upload.",
+      "training_on_data": "no",
+      "how": "Request parameter cache (default false). cache: true, which async and >50-page requests require, keeps results encrypted 24h after the request finishes (results_expire_at), and keeps an async document only until parsing ends. DELETE /v1/parse/<id> deletes sooner.",
+      "sources": [
+        "https://www.opendocrouter.ai/docs",
+        "https://www.opendocrouter.ai/terms"
+      ],
+      "notes": "A LlamaIndex product (addendum last modified 2026-10-07). LlamaIndex Terms: 'We do not train any models on User Content.' Pages are sent to the third-party model you choose (Anthropic, Google, OpenAI, ...), and 'their own usage policies apply', so end-to-end ZDR depends on that provider."
+    }
+  }
+}

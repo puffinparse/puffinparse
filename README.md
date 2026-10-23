@@ -34,7 +34,7 @@ Two things make switching real rather than aspirational. **Modes**: every call n
 | **Gateway** | `puffinparse serve`: one HTTP endpoint with aliases, fallbacks, virtual keys, budgets, rate limits, JSON logs and Prometheus metrics ([`docs/SERVER.md`](https://github.com/ajinkyashejul/puffinparse/blob/main/docs/SERVER.md)) |
 | **Long documents** | `submit` / `retrieve` jobs and provider webhooks instead of a blocking call ([below](#long-documents-jobs-and-webhooks)) |
 | **CLI** | `puffinparse parse`, `puffinparse ocr`, `puffinparse extract`, `puffinparse providers`, `puffinparse bench` |
-| **MCP server** | `puffinparse mcp`: a local stdio MCP server for Claude Code, Cursor and Codex with `parse`, `ocr`, `extract`, `list_models` and `compare` tools, using your own provider keys ([setup](https://puffinparse.com/docs/agents/)) |
+| **MCP server** | `puffinparse mcp`: a local stdio MCP server for Claude Code, Cursor and Codex with `parse`, `ocr`, `extract`, `list_models` and `compare` tools, using your own provider keys, plus a guided workflow that finds the best model for a folder of your own documents ([setup](https://puffinparse.com/docs/agents/)) |
 | **Reliability** | Retries with jittered backoff, whole-call deadlines, `Router` with ordered fallbacks / round-robin |
 | **Compatibility** | `output_format` renders any provider's result in Reducto's, Extend's or LlamaParse's own JSON, so an existing integration keeps its parser ([`docs/COMPAT.md`](https://github.com/ajinkyashejul/puffinparse/blob/main/docs/COMPAT.md)) |
 | **Cost** | Embedded, overridable price table → `cost_usd` on every response |
@@ -499,6 +499,26 @@ puffinparse mcp --models reducto,llamaparse --root ~/docs         # optional all
 
 Keys come from the server's environment and are never returned; a document goes only to the
 provider of the model the agent calls. Cursor and Codex setup: [agents page](https://puffinparse.com/docs/agents/).
+
+### Find the best model for your own documents
+
+Point your agent at a folder of documents that covers your use case and ask it to find the best
+parsing model for them (the MCP server's `find_best_model` prompt). It asks a few questions (volume,
+budget, error tolerance, data retention), shortlists models from the benchmark, runs the ones you
+pick with your own keys under a spending cap, checks the documents where models disagree, and
+recommends one with its monthly cost. You can check every output yourself in a local viewer. The
+same steps without an agent:
+
+```bash
+puffinparse eval scan ~/docs
+puffinparse eval recommend --monthly-pages 20000 --needs tables,scans --zdr
+puffinparse eval run ~/docs -m reducto,llamaparse/cost_effective,tesseract --max-cost 5
+puffinparse eval analyze ~/docs/.puffinparse/runs/<run> --write-report
+puffinparse eval view ~/docs/.puffinparse/runs/<run>             # local side-by-side viewer
+puffinparse eval anonymize ~/docs --out ~/docs-redacted          # optional, redacts locally first
+```
+
+Details: [CLI](https://puffinparse.com/docs/cli/#puffinparse-eval) and [agents page](https://puffinparse.com/docs/agents/#find-the-best-model-for-your-documents).
 
 ### Gateway server
 
