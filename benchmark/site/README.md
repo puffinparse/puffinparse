@@ -130,18 +130,22 @@ Every view is a shareable hash link:
 - `#/documents?run=…&src=…&cat=…&q=…&pm=1` — every document by title, with its source, mean
   score and best model; **Per-model scores** (`pm=1`) swaps the best-model column for one column
   per model.
-- `#/<run_id>/<model_slug>/<doc_id>?tab=…&diff=…&ov=1&page=…&rf=…` — the **inspector**:
+- `#/<run_id>/<model_slug>/<doc_id>?tab=…&diff=…&ov=1&page=…&rf=…&b=…` — the **inspector**, one
+  screen on wide displays: the page and the output side by side, each scrolling on its own, with a
+  draggable divider whose position is remembered:
   - header: breadcrumb, title, one meta line, `‹ n/N ›` and copy-link; tags, attribution, input
     path, original URL and the raw id (with a copy button) sit in **Details**;
   - model chips (a native select on phones) with each model's score on this document;
-  - the page (sticky on wide screens) with a pager for multi-page inputs and, when a
+  - the page with zoom (fit width, 50–300%) and a pager for multi-page inputs and, when a
     `<doc>.json` unified response exists for that model, **layout boxes** (`ov=1`, off by
-    default) coloured by block type, drawn only over a rendered page;
+    default; hold `o` to peek) coloured by block type, drawn only over a rendered page;
   - the score, a one-line verdict ("0 of 6 checks pass", "99.1% character match", "Table 91% ·
     TEDS 0.87"), latency and cost, and **All metrics**;
   - tabs: **Checks** (rule documents) or **Diff** (word-level LCS diff, side by side or unified,
-    after the scorer's normalisation), **Output**, **Truth** (transcript documents) and
-    **Compare models**. Each check is one sentence ("Should not contain “ARTICLE IN PRESS”")
+    after the scorer's normalisation), **Output**, **Blocks** (when a unified response exists: one
+    card per block with its type and confidence, linked both ways to its box: point at a card to
+    see the box, click a box to find the card; `b=<page>.<index>` selects one), **Truth**
+    (transcript documents) and **Compare models**. Each check is one sentence ("Should not contain “ARTICLE IN PRESS”")
     with a reason line only when it adds information, grouped by type when a document mixes
     types, filterable failing / passing / all. The checks run in the browser through a
     line-for-line JS port of `score_rules` / `normalize` / `markdown_to_text` in `puffinparse-core`
@@ -154,8 +158,11 @@ Every view is a shareable hash link:
 - Old `#/doc/<id>?run=…&model=…` links are redirected to the inspector.
 
 Keyboard: `j`/`k` next/previous document (within the current source/category/filter), `m`/`M`
-cycle models, `1`–`4` tabs, `d` split/unified diff, `o` layout boxes, `[`/`]` pages, `g l` /
-`g d` leaderboard / documents, `?` help. Light and dark follow the product site (`data-theme`
+cycle models, `1`–`5` tabs, `d` split/unified diff, `o` layout boxes (hold to peek), `[`/`]`
+pages, `g l` / `g d` leaderboard / documents, `?` help. In a local review run (`eval view`) the
+verdict bar sits under the output: `v` then `1`–`4` records a verdict and saves it at once, `n`
+opens the next unchecked output, `e` focuses the note and `Ctrl`/`⌘`+`Enter` saves and moves on;
+the header shows how many outputs are checked. Light and dark follow the product site (`data-theme`
 and the shared `puffinparse-theme` key, with a toggle in the header); the layout works down to phone
 width with no horizontal page scroll (wide tables scroll inside their frame).
 

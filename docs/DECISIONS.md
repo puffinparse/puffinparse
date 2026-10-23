@@ -236,8 +236,8 @@ conversion auditable.
 
 ## ADR-17: The benchmark results viewer stays vanilla JS
 
-**Context.** The pre-release task list had an open choice for `benchmark/site/` between a React app on Extend UI
-(PDF viewer and layout overlays out of the box) and the zero-build vanilla viewer. The viewer has
+**Context.** The pre-release task list had an open choice for `benchmark/site/` between a React app on a third-party
+component kit (PDF viewer and layout overlays out of the box) and the zero-build vanilla viewer. The viewer has
 to be where every benchmark claim can be checked: page rendering, side-by-side outputs, diffs,
 rule checklists, bbox overlays, charts, deep links.
 
