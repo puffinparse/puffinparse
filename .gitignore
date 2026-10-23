@@ -17,6 +17,8 @@ build/
 python/puffinparse/_core*.so
 python/puffinparse/_core*.pyd
 python/puffinparse/_core.abi3.*
+# The CLI binary staged into the wheel (scripts/stage_cli_for_wheel.py)
+python/puffinparse.data/
 
 # Env / secrets
 .env

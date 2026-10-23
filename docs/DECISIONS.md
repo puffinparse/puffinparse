@@ -492,3 +492,44 @@ The shipped evidence and data-handling facts age; they are dated, tested against
 and updated with the benchmark. Anonymizing misses names unless listed, so the tools say to check a
 few pages. Image-only redacted copies change what parsers see (no text layer), so a run on them
 measures OCR quality.
+
+## ADR-28: One viewer on the website and on the user's machine; the CLI ships in the wheel
+
+**Context.** `puffinparse eval view` started as a small separate page (ADR-27): the PDF in a browser
+frame, no layout boxes, its own styles. The benchmark site already has the viewer we want people to
+use, with page images, layout-box overlays, word diffs and model comparison. Two UIs meant two sets
+of bugs and a local view that looked nothing like puffinparse.com. Separately, the people running
+eval are mostly coding agents (Claude Code, Codex), which start tools with `uvx` or `npx` and
+struggle with downloading a binary, PATH changes, admin prompts and macOS quarantine.
+
+**Decision.** This supersedes ADR-27's "the viewer is local and minimal": the server stays as it
+was, the front-end changes.
+- **One front-end.** `benchmark/site/src/` (still vanilla, ADR-17) is the only viewer. The CLI
+  compiles it in (`crates/puffinparse-cli/build.rs`) and `eval view` serves it with the same
+  read-only data API the site's build writes (ADR-25): `data/index.json`, `data/runs/<id>.json`, the
+  dataset manifest, inputs and outputs, built on the fly from the run folder. A run marked `review`
+  has no ground truth, so the same views show agreement, failures and cost instead of scores, the
+  diff is against another model, and the inspector has a verdict form that posts to `api/review`.
+  Both modes gain a rendered/Markdown switch for outputs (the playground's escaping renderer, moved
+  into the viewer).
+- **Nothing from the network locally.** pdf.js 3.11.174, the same version the site loads from
+  cdnjs with SRI, is vendored in `crates/puffinparse-cli/assets/pdfjs/` (checked against those
+  hashes) and served from the binary. The local CSP allows the page's one inline script by hash and
+  pdf.js's blob worker.
+- **Overlays need the unified response**, so `eval run` saves `<doc>.json` next to each `<doc>.md`,
+  as `bench run --save-outputs` does.
+- **crates.io.** A published crate cannot read files outside its folder, so the release job copies
+  the viewer into `crates/puffinparse-cli/viewer/` (`scripts/vendor_viewer.py`) before
+  `cargo publish`; `build.rs` prefers the repository copy whenever it exists.
+- **The CLI ships inside the Python wheel**, in the wheel's scripts directory, built in the same
+  manylinux container as the extension (`scripts/stage_cli_for_wheel.py`). `pip install
+  puffinparse` gives the command, and `uvx puffinparse mcp` / `uvx puffinparse eval view <run>`
+  work with nothing installed. The GitHub Release archives stay for people who want the bare binary.
+  An npm route (`npx`) can follow once the Node package is published.
+
+**Consequences.** A fix to the viewer lands on the website and in the next CLI at once, and a
+change to the data API has to keep both producers (the site build and `eval view`) in step; the
+view tests cover the local one. Wheels grow by the CLI's size (about 6 MB compressed). The sdist
+still builds the SDK alone. The website loads one more code path (review mode) that it never
+enters.
+
