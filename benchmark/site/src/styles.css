@@ -1933,6 +1933,13 @@ svg.ov.linked rect.on {
   .insp.rv {
     grid-template-areas: "page" "work";
   }
+  /* A zoomed page scrolls sideways inside its column instead of widening the page. */
+  .insp.rv .pagecol {
+    overflow-x: auto;
+  }
+  .insp.rv .sv-page[style*="width"] {
+    max-width: none;
+  }
   .insp.rv .work {
     display: grid;
     gap: var(--s-4);

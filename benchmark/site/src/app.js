@@ -3110,7 +3110,7 @@
                   }
                   inner = esc(p);
                 } else if (truth !== null) {
-                  var dd = wordDiff(truth, p);
+                  var dd = wordDiff(stripHtmlTags(truth), stripHtmlTags(p));
                   sub = dd.del + " missing · " + dd.ins + " extra";
                   inner = renderSide(dd.p, dd.pMarks, "ins");
                 } else inner = rawOutput ? esc(p) : renderMarkdown(p);
