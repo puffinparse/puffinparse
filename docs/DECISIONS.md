@@ -478,9 +478,9 @@ recommend, open the viewer.
   gateway (ADR-15) with one gateway key whose monthly budget caps the spend; a `402 budget_exceeded` stops
   the run like the local cap. Credits are therefore "a gateway key with a budget"; how a user buys
   one (a hosted gateway, top-ups) is outside this repo and not built.
-- **The viewer is local**: an axum server on 127.0.0.1 behind a random path token, Host-header
-  check and a strict CSP, serving only the run's files. Its front-end is the benchmark viewer
-  (ADR-28).
+- **The viewer is local and minimal**: an axum server on 127.0.0.1 behind a random path token,
+  Host-header check and a strict CSP, vanilla JS with the playground's escaping Markdown renderer,
+  serving only the run's files.
 - **Anonymizing is local and conservative**: Tesseract words, pattern detectors (email, phone, card
   with Luhn, IBAN, SSN; dates and ids on request) and user-listed terms; output is image-only PDFs
   so no text layer survives; the report holds counts, never the found values.
@@ -502,7 +502,8 @@ of bugs and a local view that looked nothing like puffinparse.com. Separately, t
 eval are mostly coding agents (Claude Code, Codex), which start tools with `uvx` or `npx` and
 struggle with downloading a binary, PATH changes, admin prompts and macOS quarantine.
 
-**Decision.**
+**Decision.** This supersedes ADR-27's "the viewer is local and minimal": the server stays as it
+was, the front-end changes.
 - **One front-end.** `benchmark/site/src/` (still vanilla, ADR-17) is the only viewer. The CLI
   compiles it in (`crates/puffinparse-cli/build.rs`) and `eval view` serves it with the same
   read-only data API the site's build writes (ADR-25): `data/index.json`, `data/runs/<id>.json`, the
