@@ -58,9 +58,13 @@ extract or compare call uploads the document to the provider of the chosen model
 its per-page price; local engines (tesseract, docling, paddleocr, vllm) keep the document on the user's \
 machine or server. Use `pages` to limit cost on long documents, and prefer one model over compare unless \
 the user wants a comparison. Files are local paths (absolute paths are safest) or public http(s) URLs. \
-To find the best model for the user's own documents, follow the find_best_model prompt: scan_dataset, a few \
-questions, recommend_models, run_dataset (dry_run first, then max_cost_usd after the user agrees), run_status, \
-analyze_run, get_output and record_review on the documents it queues, then open_viewer.";
+When the user asks to find the best model for their own documents (\"use puffinparse to find the best model for \
+the files in ~/docs\"), do it with one question at most: scan_dataset; recommend_models with only what the user \
+already said (no questionnaire, the defaults are fine); pick up to four shortlisted models whose key is ready plus \
+a free local engine; run_dataset with dry_run; then ask once: run these models on these documents for about $X, \
+capped at $Y? Start it with max_cost_usd after a yes. Then run_status, analyze_run, read the queued documents and \
+record_review, and finish with the recommendation and the open_viewer link. The find_best_model prompt has the \
+details.";
 
 /// Run the server on this process's stdin / stdout until stdin closes.
 pub async fn run_stdio(cfg: Config) -> anyhow::Result<()> {
