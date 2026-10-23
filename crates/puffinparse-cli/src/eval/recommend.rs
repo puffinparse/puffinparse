@@ -16,7 +16,7 @@
 use puffinparse_core::{self as core, Mode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 
 pub const EVIDENCE_JSON: &str = include_str!("evidence.json");
@@ -465,12 +465,16 @@ pub fn recommend(req: &Requirements, top_n: usize, allowed: &dyn Fn(&str) -> boo
             chosen.push(c);
         }
     }
+    // One probe per local endpoint: the vLLM models share one, PaddleOCR's `vl` pipeline has its own.
+    let mut probed: HashMap<(String, bool), Option<Result<(), String>>> = HashMap::new();
     for (i, c) in chosen.iter_mut().enumerate() {
         c.rank = i + 1;
         let (provider, model) = c.model.split_once('/').unwrap_or((c.model.as_str(), ""));
-        if let Some(Err(problem)) = super::local::status(provider, model) {
+        let key = (provider.to_string(), provider == "paddleocr" && model.starts_with("vl"));
+        let status = probed.entry(key).or_insert_with(|| super::local::status(provider, model));
+        if let Some(Err(problem)) = status {
             c.key_ready = false;
-            c.caveats.push(problem);
+            c.caveats.push(problem.clone());
         } else if c.key_ready {
             c.reasons.push(
                 if c.env_var.is_some() && provider_needs_key(provider) {

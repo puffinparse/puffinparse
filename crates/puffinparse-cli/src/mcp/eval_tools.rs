@@ -85,6 +85,11 @@ fn writable_path(cfg: &Config, raw: &str) -> Result<PathBuf, String> {
         return Err("pass a local folder path, not a URL".into());
     }
     let p = PathBuf::from(raw);
+    // The part below the nearest existing folder is joined unresolved, so `..` there could step
+    // outside --root.
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("output path must not contain '..'".into());
+    }
     let p = if p.is_absolute() { p } else { std::env::current_dir().map_err(|e| e.to_string())?.join(p) };
     let mut existing = p.as_path();
     while !existing.exists() {

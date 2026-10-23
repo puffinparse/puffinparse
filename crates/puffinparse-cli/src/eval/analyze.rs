@@ -91,11 +91,16 @@ pub fn record_review(
         by: by.to_string(),
         at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     };
+    // One writer at a time: the viewer's handlers run concurrently, and the agent (MCP) and the user
+    // (viewer, started by the same process) record verdicts on the same run. A unique temp name keeps
+    // a writer from renaming another's file.
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITE.lock().unwrap_or_else(|p| p.into_inner());
     let mut all = load_reviews(dir);
     all.insert((review.doc.clone(), review.model.clone()), review.clone());
     let file = ReviewsFile { reviews: all.into_values().collect() };
     let path = reviews_path(dir);
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4().simple()));
     std::fs::write(&tmp, serde_json::to_string_pretty(&file).map_err(|e| e.to_string())? + "\n")
         .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("cannot write {}: {e}", path.display()))?;

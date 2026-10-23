@@ -244,10 +244,12 @@ impl Via {
         match (url, key) {
             (Some(url), Some(key)) => {
                 let url = url.trim().trim_end_matches('/').to_string();
-                if !(url.starts_with("https://")
-                    || url.starts_with("http://127.0.0.1")
-                    || url.starts_with("http://localhost"))
-                {
+                // Check the parsed host, not a prefix: `http://localhost.example.com` and
+                // `http://localhost@example.com` are not local, and the key would go out in clear.
+                let parsed = reqwest::Url::parse(&url).map_err(|e| format!("{ENV_GATEWAY_URL} is not a URL: {e}"))?;
+                let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+                let secure = parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback);
+                if !secure || !parsed.username().is_empty() || parsed.password().is_some() {
                     return Err(format!("{ENV_GATEWAY_URL} must be an https URL (or http on localhost)"));
                 }
                 Ok(Via::Gateway { url, key: key.trim().to_string() })
@@ -370,14 +372,20 @@ impl Prepared {
 pub fn prepare_new(spec: &RunSpec, via: &Via, mut manifest: RunManifest) -> Result<Prepared, String> {
     check_budget(&manifest.estimate, spec.max_cost_usd)?;
     let parent = spec.out_dir.clone().unwrap_or_else(|| runs_dir(Path::new(&manifest.dataset_root)));
-    let mut dir = parent.join(&manifest.run_id);
-    let mut n = 2;
-    while dir.exists() {
-        dir = parent.join(format!("{}-{n}", manifest.run_id));
-        n += 1;
-    }
+    std::fs::create_dir_all(&parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    // Claim the folder with create_dir, which fails if it exists: two runs started in the same second
+    // (ids have one-second resolution) must not share a folder.
+    let mut n = 1;
+    let dir = loop {
+        let candidate =
+            if n == 1 { parent.join(&manifest.run_id) } else { parent.join(format!("{}-{n}", manifest.run_id)) };
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(format!("cannot create {}: {e}", candidate.display())),
+        }
+    };
     manifest.run_id = dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or(manifest.run_id);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     manifest.via = via.name().to_string();
     write_manifest(&dir, &manifest)?;
     Ok(Prepared {
@@ -415,7 +423,8 @@ pub fn prepare_resume(dir: &Path, via: &Via, max_cost_usd: Option<f64>) -> Resul
 }
 
 pub fn check_budget(est: &Estimate, max_cost_usd: Option<f64>) -> Result<(), String> {
-    let priced = est.total_usd > 0.0;
+    // A model without a list price is not free: without a cap nothing would stop its spend.
+    let priced = est.total_usd > 0.0 || !est.unpriced_models.is_empty();
     match max_cost_usd {
         Some(max) if est.total_usd > max => Err(format!(
             "estimated cost ${:.2} at list price is above max_cost_usd ${max:.2}; raise it after the user agrees, or run \
@@ -423,9 +432,14 @@ pub fn check_budget(est: &Estimate, max_cost_usd: Option<f64>) -> Result<(), Str
             est.total_usd
         )),
         None if priced => Err(format!(
-            "this run is estimated at ${:.2} at list price; pass max_cost_usd (at least the estimate) once the user has \
-             agreed to the spend",
-            est.total_usd
+            "this run is estimated at ${:.2} at list price{}; pass max_cost_usd (at least the estimate) once the user \
+             has agreed to the spend",
+            est.total_usd,
+            if est.unpriced_models.is_empty() {
+                String::new()
+            } else {
+                format!(", plus {} with no list price", est.unpriced_models.join(", "))
+            }
         )),
         _ => Ok(()),
     }
@@ -626,11 +640,17 @@ pub async fn execute(prep: Prepared, caller: Caller, opts: ExecOptions, progress
     let stop_reason: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let max_cost = manifest.max_cost_usd;
     let pages = manifest.pages.clone();
+    let selection: Option<Vec<(u32, Option<u32>)>> =
+        pages.as_deref().and_then(|p| core::util::parse_page_ranges(p).ok());
+    // List-price cost of the calls in flight. A call reserves its estimate before it starts, so the
+    // concurrent calls of every model together cannot start more spend than the cap leaves; the
+    // reservation is swapped for the provider's reported cost when the call returns.
+    let reserved: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.0));
 
     let per_model = manifest.models.iter().map(|model| {
         let jobs: Vec<DatasetDoc> =
             docs.iter().filter(|d| !done.contains(&(model.clone(), d.id.clone()))).cloned().collect();
-        let (model, dir, root, caller, log, progress, stop_reason, pages, opts) = (
+        let (model, dir, root, caller, log, progress, stop_reason, pages, opts, reserved, selection) = (
             model.clone(),
             dir.clone(),
             dataset_root.clone(),
@@ -640,11 +660,13 @@ pub async fn execute(prep: Prepared, caller: Caller, opts: ExecOptions, progress
             stop_reason.clone(),
             pages.clone(),
             opts.clone(),
+            reserved.clone(),
+            selection.clone(),
         );
         async move {
             stream::iter(jobs)
                 .map(|doc| {
-                    let (model, dir, root, caller, log, progress, stop_reason, pages, opts) = (
+                    let (model, dir, root, caller, log, progress, stop_reason, pages, opts, reserved) = (
                         model.clone(),
                         dir.clone(),
                         root.clone(),
@@ -654,12 +676,31 @@ pub async fn execute(prep: Prepared, caller: Caller, opts: ExecOptions, progress
                         stop_reason.clone(),
                         pages.clone(),
                         opts.clone(),
+                        reserved.clone(),
                     );
+                    let expected = core::pricing::estimate_cost(&model, Mode::Parse, doc.billed_pages(selection.as_deref()))
+                        .unwrap_or(0.0);
                     async move {
                         if progress.cancel.load(Ordering::Relaxed)
                             || stop_reason.lock().unwrap_or_else(|p| p.into_inner()).is_some()
                         {
                             return;
+                        }
+                        if let Some(max) = max_cost {
+                            let spent = progress.inner.lock().unwrap_or_else(|p| p.into_inner()).spent_usd;
+                            let mut r = reserved.lock().unwrap_or_else(|p| p.into_inner());
+                            if expected > 0.0 && spent + *r + expected > max + 1e-9 {
+                                let mut s = stop_reason.lock().unwrap_or_else(|p| p.into_inner());
+                                if s.is_none() {
+                                    *s = Some(format!(
+                                        "the next call would take the spend past max_cost_usd ${max:.2} (spent ${spent:.2}, \
+                                         ${:.2} in flight)",
+                                        *r
+                                    ));
+                                }
+                                return;
+                            }
+                            *r += expected;
                         }
                         let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                         let input = CallInput {
@@ -715,6 +756,10 @@ pub async fn execute(prep: Prepared, caller: Caller, opts: ExecOptions, progress
                                     let _ = writeln!(f, "{line}");
                                 }
                             }
+                        }
+                        if max_cost.is_some() {
+                            let mut r = reserved.lock().unwrap_or_else(|p| p.into_inner());
+                            *r = (*r - expected).max(0.0);
                         }
                         let mut p = progress.inner.lock().unwrap_or_else(|p| p.into_inner());
                         let cost = record.cost_usd.unwrap_or(0.0);
@@ -964,7 +1009,20 @@ mod tests {
         let progress = Arc::new(Progress::default());
         let out = execute(prep, fake(None, None), o, progress.clone()).await;
         assert_eq!(out.status, RunStatus::BudgetStopped);
-        assert_eq!(progress.snapshot().done, 3);
+        let sequential = progress.snapshot().done;
+        assert!((1..4).contains(&sequential), "{sequential}");
+
+        // Calls in flight count against the cap: concurrent calls start no more spend than one at a
+        // time would.
+        let (_, mut m) = plan(&s, &Via::Keys).unwrap();
+        m.estimate.total_usd = 0.0;
+        let prep = prepare_new(&s, &Via::Keys, m).unwrap();
+        let mut o = opts();
+        o.concurrency = 4;
+        let progress = Arc::new(Progress::default());
+        let out = execute(prep, fake(None, None), o, progress.clone()).await;
+        assert_eq!(out.status, RunStatus::BudgetStopped);
+        assert!(progress.snapshot().done <= sequential, "{} > {sequential}", progress.snapshot().done);
     }
 
     #[tokio::test]

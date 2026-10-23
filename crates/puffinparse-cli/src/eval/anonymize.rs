@@ -3,8 +3,10 @@
 //! For each document: PDF pages are rendered to JPEG with poppler's `pdftoppm` (JPEG and simple
 //! PNG images are used as they are), every page is read with the local Tesseract engine for word
 //! boxes, words matching the chosen kinds of personal data or the user's own terms are covered
-//! with black boxes, and the page images are written into a new image-only PDF. The copy has no
-//! text layer, so nothing hidden under a box survives; providers then read it by OCR, like a scan.
+//! with black boxes, and the boxed pages are rendered again with `pdftoppm`, so the boxes are
+//! burned into the pixels, before the final image-only PDF is written. The copy has no text layer
+//! and no original image under the boxes (nor the source JPEG's metadata), so nothing hidden under
+//! a box survives; providers then read it by OCR, like a scan.
 //!
 //! Nothing leaves the machine, and the report counts redactions by kind without ever repeating the
 //! redacted text. Detection is pattern-based: an agent should look at a few redacted pages (and pass
@@ -187,22 +189,43 @@ pub fn detect(words: &[PageWord], kinds: &[String], terms: &[String]) -> Vec<(us
     }
     // Multi-word numbers: card numbers (Luhn) and phone numbers, as runs of digit-and-separator
     // words; IBANs printed in groups of four.
+    let numberish = |w: &PageWord| phoneish(trim_punct(&w.text)) || w.text.starts_with('(');
+    // Cards first, from every start word and every window length: a line number before the card or
+    // its expiry date after it must not hide it inside a longer run.
+    let mut carded = vec![false; words.len()];
+    if on("card") {
+        for start in 0..words.len() {
+            let mut joined = String::new();
+            let mut end = None;
+            for (j, w) in words.iter().enumerate().skip(start).take(6) {
+                if !numberish(w) {
+                    break;
+                }
+                joined.push_str(trim_punct(&w.text));
+                if (13..=19).contains(&digits(&joined)) && luhn(&joined) {
+                    end = Some(j + 1);
+                }
+            }
+            if let Some(end) = end {
+                mark(start..end, "card", &mut hits);
+                carded[start..end].iter_mut().for_each(|c| *c = true);
+            }
+        }
+    }
     let mut i = 0;
     while i < words.len() {
-        if !phoneish(trim_punct(&words[i].text)) && !words[i].text.starts_with('(') {
+        if carded[i] || !numberish(&words[i]) {
             i += 1;
             continue;
         }
         let mut j = i;
         let mut joined = String::new();
-        while j < words.len() && (phoneish(trim_punct(&words[j].text)) || words[j].text.starts_with('(')) && j - i < 6 {
+        while j < words.len() && !carded[j] && numberish(&words[j]) && j - i < 6 {
             joined.push_str(trim_punct(&words[j].text));
             j += 1;
         }
         let n = digits(&joined);
-        if on("card") && (13..=19).contains(&n) && luhn(&joined) {
-            mark(i..j, "card", &mut hits);
-        } else if on("phone")
+        if on("phone")
             && (8..=15).contains(&n)
             && !is_date(&joined)
             && (j - i > 1 || joined.contains(['+', '(', '-', ' ']) || n >= 10)
@@ -526,7 +549,23 @@ async fn anonymize_doc(
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&dest, write_pdf(&pages, page_dpi))
+        // Burn the boxes into the pixels: drawn over the original image, they would leave that image
+        // (and a source JPEG's metadata) in the file for anyone who extracts it.
+        let boxed = scratch.join("boxed.pdf");
+        std::fs::write(&boxed, write_pdf(&pages, page_dpi)).map_err(|e| e.to_string())?;
+        let flat_dir = scratch.join("flat");
+        std::fs::create_dir_all(&flat_dir).map_err(|e| e.to_string())?;
+        let mut flat = Vec::new();
+        for f in render_pdf(&boxed, &flat_dir, page_dpi).await? {
+            let data = std::fs::read(&f).map_err(|e| e.to_string())?;
+            let (width, height) = jpeg_size(&data).ok_or("pdftoppm wrote an unreadable JPEG")?;
+            let components = jpeg_components(&data);
+            flat.push((PageImage::Jpeg { data, width, height, components }, Vec::new()));
+        }
+        if flat.len() != pages.len() {
+            return Err("flattening the redacted pages lost a page".into());
+        }
+        std::fs::write(&dest, write_pdf(&flat, page_dpi))
             .map_err(|e| format!("cannot write {}: {e}", dest.display()))?;
         Ok(DocReport { id: doc.id.clone(), output: Some(name), pages: pages.len(), redactions, skipped: None })
     }
@@ -634,6 +673,13 @@ mod tests {
         let hits = hit_texts(&words, &["date"], &[]);
         assert_eq!(hits, [("2026-10-12,".to_string(), "date".to_string())]);
         assert!(luhn("4242424242424242") && !luhn("4242424242424241"));
+        // A card next to its expiry date or after a line number is still a card.
+        for text in ["Card 4242 4242 4242 4242 12/28", "1 4242 4242 4242 4242"] {
+            let words: Vec<PageWord> = text.split_whitespace().map(w).collect();
+            let hits = hit_texts(&words, DEFAULT_KINDS, &[]);
+            let cards = hits.iter().filter(|(_, k)| k == "card").count();
+            assert!(cards >= 4, "{text}: {hits:?}");
+        }
         assert!(is_id("INV-2026-00042") && !is_id("2026-00042") && !is_id("hello"));
     }
 
@@ -744,6 +790,18 @@ mod tests {
         let all: String = words.iter().map(|w| w.text.to_lowercase()).collect::<Vec<_>>().join(" ");
         assert!(!all.contains("jane.doe") && !all.contains("invoice"), "{all}");
         assert!(all.contains("today"), "{all}");
+        // The boxes are in the pixels: no vector boxes, and OCR of the embedded image itself finds
+        // nothing redacted.
+        assert!(!String::from_utf8_lossy(&copy).contains(" re f"));
+        let image = copy.windows(15).position(|w| w == b"/Subtype /Image").unwrap();
+        let start = image + copy[image..].windows(7).position(|w| w == b"stream\n").unwrap() + 7;
+        let end = start + copy[start..].windows(10).position(|w| w == b"\nendstream").unwrap();
+        assert!(copy[start..].starts_with(&[0xff, 0xd8]), "the page image is a JPEG");
+        let embedded = dir.with_extension("embedded.jpg");
+        std::fs::write(&embedded, &copy[start..end]).unwrap();
+        let words = page_words(&embedded).await.unwrap();
+        let all: String = words.iter().map(|w| w.text.to_lowercase()).collect::<Vec<_>>().join(" ");
+        assert!(!all.contains("jane.doe") && !all.contains("invoice"), "{all}");
         let manifest = std::fs::read_to_string(out.join(".puffinparse-redactions.json")).unwrap();
         assert!(!manifest.contains("jane"), "the report never repeats redacted text");
     }

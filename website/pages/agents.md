@@ -93,7 +93,7 @@ stdio, built into the CLI. It gives an agent five tools for single documents and
 | Tool | What it does |
 |---|---|
 | `scan_dataset` | `path`. Counts the documents in a local folder: pages, file types, the largest files, reference transcripts, earlier runs. No network. |
-| `recommend_models` | `monthly_pages`, `max_usd_per_1k_pages`, `error_tolerance` (`low`, `medium`, `high`), `priority` (`accuracy`, `balanced`, `cost`, `speed`), `zdr_required`, `local_only`, `needs` (`tables`, `scans`, `forms`, ...), `top`. A shortlist from the public benchmark, list prices and each provider's data handling, with the monthly cost and whether the key is set. No network. |
+| `recommend_models` | `monthly_pages`, `max_usd_per_1k_pages`, `error_tolerance` (`low`, `medium`, `high`), `priority` (`accuracy`, `balanced`, `cost`, `speed`), `zdr_required`, `local_only`, `needs` (`tables`, `scans`, `forms`, ...), `top_n`. A shortlist from the public benchmark, list prices and each provider's data handling, with the monthly cost and whether the key is set. No network. |
 | `run_dataset` | `dataset`, `models`, `max_cost_usd` (required for priced models), optional `pages`, `limit`, `filter`, `via` (`keys` or `gateway`), `dry_run`, `resume`. Runs every model over every document in the background and saves each output; returns the run folder. |
 | `run_status`, `cancel_run` | Progress, spend and failures of a run; stop it. `run_status` waits for a running run (up to `wait_seconds`, default 30), so the agent never has to sleep between checks. |
 | `analyze_run` | Per model: failures, agreement with the other models, latency, cost, monthly cost at your volume, your reviews, scores against reference transcripts, and a queue of documents worth checking by eye. `write_report` writes `report.md`. |
@@ -212,7 +212,7 @@ serves only the documents in that run.
 machine, finds email addresses, phone numbers, card numbers, IBANs and US social security numbers
 (dates and other long numbers on request), plus any names or words you list, and writes copies
 with those words blacked out. The copies are image-only PDFs, so no hidden text layer survives. It
-needs Tesseract and, for PDFs, `pdftoppm` (poppler). Detection is pattern-based, so check a few
+needs Tesseract and `pdftoppm` (poppler), which also burns the boxes into the page pixels. Detection is pattern-based, so check a few
 pages before you rely on it: names are only removed if you list them.
 
 **What the analysis is.** With no reference transcripts, a model is judged by how much it agrees

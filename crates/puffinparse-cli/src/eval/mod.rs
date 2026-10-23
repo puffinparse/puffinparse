@@ -88,7 +88,8 @@ pub struct RecommendArgs {
     /// accuracy | balanced | cost | speed
     #[arg(long, default_value = "balanced")]
     priority: String,
-    /// Only providers that offer zero data retention (or local engines).
+    /// Only providers that offer zero data retention (or local engines). Includes providers whose
+    /// zero retention needs an enterprise agreement; each such model says so in its caveats.
     #[arg(long)]
     zdr: bool,
     /// Only local / self-hosted engines.
@@ -261,10 +262,33 @@ pub async fn run(cmd: EvalCommand) -> Result<()> {
     }
 }
 
+/// Fails when a local engine among `models` cannot be reached (the same check as the MCP tools).
+fn require_local_engines(models: &[String], fix: &str) -> Result<()> {
+    let down: Vec<String> = models
+        .iter()
+        .filter_map(|m| {
+            let (provider, model) = m.split_once('/').unwrap_or((m.as_str(), ""));
+            match local::status(provider, model) {
+                Some(Err(e)) => Some(format!("{m}: {e}")),
+                _ => None,
+            }
+        })
+        .collect();
+    if !down.is_empty() {
+        bail!("local engines not reachable, start them or {fix}:\n  {}", down.join("\n  "));
+    }
+    Ok(())
+}
+
 async fn run_cmd(a: RunArgs) -> Result<()> {
     let via = if a.gateway { run::Via::gateway_from_env().map_err(|e| anyhow!(e))? } else { run::Via::Keys };
     let opts = run::ExecOptions { concurrency: a.concurrency, timeout_secs: a.timeout, max_retries: a.max_retries };
     let prep = if let Some(dir) = &a.resume {
+        // Before prepare_resume, which marks the run as running again.
+        if !a.gateway {
+            let manifest = run::load_manifest(dir).map_err(|e| anyhow!(e))?;
+            require_local_engines(&manifest.models, "resume once they are up")?;
+        }
         run::prepare_resume(dir, &via, a.max_cost).map_err(|e| anyhow!(e))?
     } else {
         let Some(dataset) = a.dataset.clone() else { bail!("name a dataset folder, or --resume a run") };
@@ -302,26 +326,14 @@ async fn run_cmd(a: RunArgs) -> Result<()> {
         if a.dry_run {
             return Ok(());
         }
-        let down: Vec<String> = if a.gateway {
-            Vec::new()
-        } else {
-            manifest
-                .models
-                .iter()
-                .filter_map(|m| {
-                    let (provider, model) = m.split_once('/').unwrap_or((m.as_str(), ""));
-                    match local::status(provider, model) {
-                        Some(Err(e)) => Some(format!("{m}: {e}")),
-                        _ => None,
-                    }
-                })
-                .collect()
-        };
-        if !down.is_empty() {
-            bail!("local engines not reachable, start them or drop them from --models:\n  {}", down.join("\n  "));
+        if !a.gateway {
+            require_local_engines(&manifest.models, "drop them from --models")?;
         }
-        if a.max_cost.is_none() && e.total_usd > 0.0 {
-            bail!("pass --max-cost (at least ${:.2}) to start this run", e.total_usd);
+        if a.max_cost.is_none() && (e.total_usd > 0.0 || !e.unpriced_models.is_empty()) {
+            bail!(
+                "pass --max-cost (at least ${:.2}, more for models with no list price) to start this run",
+                e.total_usd
+            );
         }
         run::prepare_new(&spec, &via, manifest).map_err(|e| anyhow!(e))?
     };

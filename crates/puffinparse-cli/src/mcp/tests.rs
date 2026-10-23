@@ -775,5 +775,10 @@ async fn dataset_tools_respect_root() {
         .call(3, "anonymize_dataset", json!({ "dataset": inside, "out": std::env::temp_dir().join("pp-anon-outside") }))
         .await;
     assert_eq!(anon["isError"], true);
+    // `..` below a folder that does not exist yet would only be resolved when writing.
+    let sneaky = format!("{}/new/../../pp-anon-escape", inside.display());
+    let anon = c.call(4, "anonymize_dataset", json!({ "dataset": inside, "out": sneaky })).await;
+    assert_eq!(anon["isError"], true);
+    assert!(text(&anon).contains(".."), "{anon}");
     let _ = std::fs::remove_dir_all(&inside);
 }

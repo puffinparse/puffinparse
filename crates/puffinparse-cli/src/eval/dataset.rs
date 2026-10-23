@@ -80,7 +80,8 @@ pub struct Skipped {
 
 impl Dataset {
     pub fn total_pages(&self) -> u32 {
-        self.docs.iter().map(|d| d.pages.unwrap_or(1).max(1)).sum()
+        // A corrupt page count must not overflow the sum.
+        self.docs.iter().fold(0u32, |n, d| n.saturating_add(d.pages.unwrap_or(1).max(1)))
     }
 
     pub fn unknown_pages(&self) -> usize {

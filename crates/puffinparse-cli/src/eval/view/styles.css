@@ -98,8 +98,9 @@ select, input { background: var(--paper); color: var(--ink); border: 1px solid v
 .review .label { color: var(--ink-3); font-size: 12px; }
 #verdicts { display: flex; gap: .25rem; flex-wrap: wrap; }
 #verdicts label { border: 1px solid var(--rule); border-radius: 4px; padding: .1rem .4rem; cursor: pointer; font-size: 12px; }
-#verdicts input { display: none; }
+#verdicts input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
 #verdicts label:has(input:checked) { border-color: var(--scan-edge); background: var(--scan-wash); }
+#verdicts label:has(input:focus-visible) { outline: 2px solid var(--scan); outline-offset: 1px; }
 #notes { flex: 1; min-width: 8rem; }
 .review button { border: 1px solid var(--ink); background: var(--ink); color: var(--paper); border-radius: 4px; padding: .15rem .7rem; cursor: pointer; }
 @media (max-width: 900px) {
